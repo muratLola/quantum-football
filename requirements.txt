@@ -5,3 +5,4 @@ requests
 qiskit
 qiskit-aer
 lxml
+plotly
