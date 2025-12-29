@@ -8,7 +8,7 @@ import time
 from difflib import get_close_matches
 
 # -----------------------------------------------------------------------------
-# 1. AYARLAR & CSS (LIVE EFEKTLERİ EKLENDİ)
+# 1. AYARLAR & CSS (LIVE EFEKTLERİ + FOOTER)
 # -----------------------------------------------------------------------------
 st.set_page_config(
     page_title="Quantum AI Live",
@@ -115,6 +115,30 @@ st.markdown("""
     .badge-high { background-color: #238636; color: white; padding: 4px 10px; border-radius: 15px; font-weight: bold; font-size: 0.8rem; }
     .badge-medium { background-color: #d29922; color: black; padding: 4px 10px; border-radius: 15px; font-weight: bold; font-size: 0.8rem; }
     .badge-low { background-color: #da3633; color: white; padding: 4px 10px; border-radius: 15px; font-weight: bold; font-size: 0.8rem; }
+
+    /* FOOTER STİLİ */
+    .footer-text {
+        text-align: center;
+        font-size: 0.8rem;
+        color: #64748b;
+        margin-top: 40px;
+        padding-bottom: 20px;
+        border-top: 1px solid #334155;
+        padding-top: 20px;
+    }
+    .disclaimer-warning {
+        background-color: #161b22;
+        border: 1px solid #da3633;
+        color: #cbd5e1;
+        padding: 15px;
+        border-radius: 8px;
+        font-size: 0.85rem;
+        margin-top: 30px;
+        text-align: center;
+        max-width: 800px;
+        margin-left: auto;
+        margin-right: auto;
+    }
     </style>
     """, unsafe_allow_html=True)
 
@@ -122,7 +146,18 @@ st.markdown("""
 # 2. AYARLAR & GÜVENLİK
 # -----------------------------------------------------------------------------
 # API Anahtarını st.secrets'tan al, yoksa yedeği kullan (Güvenlik Önlemi)
-API_KEY = st.secrets.get("FOOTBALL_API_KEY", '741fe4cfaf31419a864d7b6777b23862')
+# NOT: Kendi API anahtarını buraya veya secrets.toml'a koymalısın.
+# Buradaki anahtar örnek amaçlıdır, süresi dolabilir.
+# --- API KEY GÜVENLİK AYARI (RENDER UYUMLU) ---
+import os
+
+try:
+    # Önce Streamlit secrets dosyasına bakmaya çalış
+    API_KEY = st.secrets["FOOTBALL_API_KEY"]
+except Exception:
+    # Eğer secrets dosyası yoksa (Render hatası), çevresel değişkenlere bak
+    # O da yoksa buradaki yedek anahtarı kullan
+    API_KEY = os.environ.get("FOOTBALL_API_KEY", '741fe4cfaf31419a864d7b6777b23862')
 HEADERS = {'X-Auth-Token': API_KEY}
 BASE_URL = 'https://api.football-data.org/v4'
 
@@ -160,9 +195,10 @@ def render_form_badges(form_str):
 # -----------------------------------------------------------------------------
 @st.cache_data(ttl=14400) # 4 Saatlik Cache
 def fetch_data(league_code):
-    # SÜPER LİG (SOCCERWAY SCRAPER MANTIĞI)
+    # SÜPER LİG (SOCCERWAY SCRAPER MANTIĞI - FALLBACK İLE)
     if league_code == 'TR1':
         try:
+            # Soccerway genelde stabildir ama bazen structure değişir
             url = "https://us.soccerway.com/national/turkey/super-lig/20252026/regular-season/c68/tables/"
             headers = {"User-Agent": "Mozilla/5.0"}
             r = requests.get(url, headers=headers, timeout=10)
@@ -174,12 +210,16 @@ def fetch_data(league_code):
                 standings = []
                 for idx, row in df.iterrows():
                     try:
-                        # Soccerway yapısına göre basit parse
-                        team = str(row[1]).strip() # Takım adı genelde 2. kolonda
-                        played = int(row[2])
-                        pts = int(row.iloc[-1]) # Puan son kolonda
+                        # Soccerway yapısına göre basit parse (Hata toleranslı)
+                        team_col = 1 if isinstance(row[1], str) else 2
+                        team = str(row[team_col]).strip() 
+                        # Veri temizliği
+                        team = team.replace('…', '').strip()
                         
-                        # Form simülasyonu (Veri çekilemezse)
+                        played = int(row['P'])
+                        pts = int(row['P.1']) if 'P.1' in row else int(row.iloc[-1])
+                        
+                        # Form simülasyonu (Veri çekilemezse mantıklı bir form ata)
                         rank = idx + 1
                         if rank <= 3: f = "W,W,D,W,W"
                         elif rank <= 8: f = "W,D,L,W,D"
@@ -190,24 +230,26 @@ def fetch_data(league_code):
                             "team": {"name": team},
                             "playedGames": played,
                             "form": f,
-                            "goalsFor": int(row[4]), # Tahmini kolonlar
-                            "goalsAgainst": int(row[5]),
+                            "goalsFor": int(row['F']),
+                            "goalsAgainst": int(row['A']),
                             "points": pts,
                             "position": rank
                         })
                     except: continue
                 
-                # Fikstür
+                # Fikstür - Basit ve hata vermeyecek şekilde
                 matches = []
                 if len(standings) > 0:
-                    top = [t['team']['name'] for t in standings[:12]]
+                    top = [t['team']['name'] for t in standings[:14]]
+                    # İlk 14 takımı eşleştir (Demo için yeterli, gerçek fikstür çok karmaşık parse gerektirir)
                     for i in range(0, len(top), 2):
-                        matches.append({"homeTeam": {"name": top[i]}, "awayTeam": {"name": top[i+1]}, "utcDate": datetime.now().isoformat()})
+                        if i+1 < len(top):
+                            matches.append({"homeTeam": {"name": top[i]}, "awayTeam": {"name": top[i+1]}, "utcDate": datetime.now().isoformat()})
                 
                 return {"standings": {"standings": [{"table": standings}]}, "matches": {"matches": matches}, "scorers": {"scorers": []}}
         except: 
-            # Hata olursa boş dönme, fallback yapma (burası geliştirilebilir)
-            pass
+            # Hata olursa global API'yi denemesin, direkt None dönsün (TR için)
+            return None
 
     # GLOBAL API
     try:
@@ -242,20 +284,12 @@ def simulate_match_v25(home_name, away_name, stats, avg_goals):
     h_xg = (h['att'] * a['def'] * avg_goals) + home_adv
     a_xg = (a['att'] * h['def'] * avg_goals) * dep_penalti
     
-    # Form Etkisi (Dengeli)
+    # Form Etkisi (Dengeli - %20 Etki)
     h_xg *= (0.9 + (h['form_val'] * 0.2))
     a_xg *= (0.9 + (a['form_val'] * 0.2))
     
-    # DIXON-COLES DÜZELTMESİ (Düşük Skorlar İçin)
-    def dc_adjust(gh, ga, rho=0.08):
-        if gh==0 and ga==0: return 1 - rho
-        elif gh==0 and ga==1: return 1 + rho
-        elif gh==1 and ga==0: return 1 + rho
-        elif gh==1 and ga==1: return 1 - rho
-        return 1.0
-
-    # MONTE CARLO (20k Simülasyon)
-    SIMS = 20000
+    # MONTE CARLO (15k Simülasyon - Performans için optimize)
+    SIMS = 15000
     rng = np.random.default_rng()
     
     h_goals = rng.poisson(h_xg, SIMS)
@@ -266,7 +300,7 @@ def simulate_match_v25(home_name, away_name, stats, avg_goals):
     px = np.sum(h_goals == a_goals) / SIMS * 100
     p2 = np.sum(h_goals < a_goals) / SIMS * 100
     
-    # ENTROPY BAZLI GÜVEN SKORU (DAHA GERÇEKÇİ)
+    # ENTROPY BAZLI GÜVEN SKORU
     probs = np.array([p1, px, p2]) / 100
     entropy = -np.sum(probs * np.log(probs + 1e-9))
     max_entropy = np.log(3)
@@ -298,7 +332,7 @@ def simulate_match_v25(home_name, away_name, stats, avg_goals):
     risk_label = "YÜKSEK" if final_conf > 65 else "ORTA" if final_conf > 45 else "DÜŞÜK"
     comment = f"**{safe_home}** ({h_xg:.2f} xG) ile **{safe_away}** ({a_xg:.2f} xG) karşılaşıyor. "
     comment += f"Q-Core motoru ev sahibine %{p1:.0f} şans veriyor. "
-    comment += f"Olasılık dağılımı (Entropy) incelendiğinde bu maç **{risk_label} GÜVEN** seviyesindedir. "
+    comment += f"Olasılık dağılımı incelendiğinde bu maç **{risk_label} GÜVEN** seviyesindedir. "
     if o25 > 55: comment += "Gol beklentisi yüksek, **2.5 ÜST** değerlendirilebilir."
     else: comment += "Kontrollü oyun ve **2.5 ALT** senaryosu ön planda."
 
@@ -323,14 +357,14 @@ def create_radar(h_name, h_stats, a_name, a_stats):
 # 6. CANLI SKORBOARD RENDERER (GÖRSEL ŞÖLEN)
 # -----------------------------------------------------------------------------
 def render_live_scoreboard(h_name, a_name):
-    # Demo modunda rastgele dakika ve aksiyon üretir
+    # Demo modunda rastgele dakika ve aksiyon üretir (Gerçek API paralı olduğu için)
     minute = np.random.randint(15, 85)
     
     # Basit skor simülasyonu
     h_s = 0 if minute < 20 else np.random.randint(0, 3)
     a_s = 0 if minute < 30 else np.random.randint(0, 2)
     
-    actions = ["Orta sahada top çeviriyorlar", "Tehlikeli atak gelişiyor!", "Korner kullanılıyor", "Oyun durdu, sakatlık var", "VAR kontrolü..."]
+    actions = ["Orta sahada top çeviriyorlar", "Tehlikeli atak gelişiyor!", "Korner kullanılıyor", "Oyun durdu, sakatlık var", "VAR kontrolü...", "Tribünlerden yoğun destek var"]
     action = np.random.choice(actions)
     
     st.markdown(f"""
@@ -351,7 +385,7 @@ def render_live_scoreboard(h_name, a_name):
 # 7. MAIN APP
 # -----------------------------------------------------------------------------
 def main():
-    st.markdown("<div class='quantum-title'>QUANTUM AI v25</div>", unsafe_allow_html=True)
+    st.markdown("<div class='quantum-title'>QUANTUM AI v26</div>", unsafe_allow_html=True)
     
     col_sel1, col_sel2 = st.columns([1, 2])
     with col_sel1:
@@ -361,7 +395,7 @@ def main():
     with st.spinner("Veri tabanına bağlanılıyor..."):
         data = fetch_data(league_code)
     
-    if not data or not data.get('matches'): st.error("Veri alınamadı."); return
+    if not data or not data.get('matches'): st.error("⚠️ Veri sunucularına erişilemedi veya bu ligde maç yok."); return
 
     # İstatistik Hazırlığı
     stats = {}
@@ -399,7 +433,7 @@ def main():
     if live_mode:
         m_data = matches[selected]
         render_live_scoreboard(m_data['homeTeam']['name'], m_data['awayTeam']['name'])
-        st.info("ℹ️ Not: Canlı veriler Q-State motoru tarafından simüle edilmektedir.")
+        st.info("ℹ️ Not: Canlı veriler demo modundadır (Ücretsiz API kısıtlaması).")
 
     if st.button("ANALİZİ BAŞLAT", use_container_width=True):
         m_data = matches[selected]
@@ -460,6 +494,26 @@ def main():
 
         else:
             st.error("Veri eşleştirilemedi. Lütfen başka maç seçin.")
+
+    # -----------------------------------------------------------------------------
+    # 8. YASAL UYARI & FOOTER (MUTLAKA EKLE)
+    # -----------------------------------------------------------------------------
+    st.markdown("---") # Ayırıcı çizgi
+    
+    st.markdown("""
+    <div class="disclaimer-warning">
+        <strong>⚠️ YASAL UYARI:</strong><br>
+        Bu uygulama ("Quantum AI"), yalnızca istatistiksel veri analizi ve simülasyon amaçlıdır. 
+        Burada sunulan tahminler ve olasılıklar <strong>yatırım tavsiyesi değildir</strong> ve kesinlik içermez.
+        Bahis oynamak risklidir ve bağımlılık yapabilir. Bu site bahis oynatmaz veya teşvik etmez.
+        <br><br>
+        🔞 <strong>18 yaşından küçükler için uygun değildir.</strong>
+    </div>
+
+    <div class="footer-text">
+        © 2025 Quantum AI v26 | Developed by MuratLola | Powered by Python & Streamlit
+    </div>
+    """, unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
