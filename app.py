@@ -29,7 +29,7 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # API
-API_KEY = '741fe4cfaf31419a864d7b6777b23862'
+API_KEY = st.secrets["FOOTBALL_API_KEY"]
 HEADERS = {'X-Auth-Token': API_KEY}
 BASE_URL = 'https://api.football-data.org/v4'
 
@@ -314,4 +314,5 @@ def main():
                 cols[3].metric("2.5 Üst Oranı", f"{fair_odds['2.5 Üst']:.2f}")
 
 if __name__ == "__main__":
+
     main()
