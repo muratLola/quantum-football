@@ -130,7 +130,7 @@ def fetch_data(code):
             headers=HEADERS,
             params={
                 "dateFrom": datetime.now().strftime("%Y-%m-%d"),
-                "dateTo": (datetime.now()+timedelta(days=10)).strftime("%Y-%m-%d")
+                "dateTo": (datetime.now()+timedelta(days=14)).strftime("%Y-%m-%d") # Süreyi 14 güne çıkardım
             }
         )
         if r1.status_code != 200: return None
@@ -138,21 +138,21 @@ def fetch_data(code):
     except: return None
 
 # -----------------------------------------------------------------------------
-# 5. CORE ENSEMBLE ENGINE (Meta-Learner + 3 Model)
+# 5. CORE ENSEMBLE ENGINE (Meta-Learner + 3 Models)
 # -----------------------------------------------------------------------------
 def run_ensemble_simulation(home, away, stats, avg_goals):
-    h = match_team_name(home, stats.keys())
-    a = match_team_name(away, stats.keys())
+    h = match_team_name(home, list(stats.keys()))
+    a = match_team_name(away, list(stats.keys()))
     if not h or not a: return None
 
     hs, as_ = stats[h], stats[a]
 
-    # --- MODEL 1: POISSON (GOL ODAKLI) ---
+    # --- MODEL 1: POISSON (Goal Driven) ---
     home_adv = 0.35 * hs["home_factor"]
     h_xg = hs["att"] * as_["def"] * avg_goals + home_adv
     a_xg = as_["att"] * hs["def"] * avg_goals * as_["away_factor"]
     
-    # Form Etkisi (Temporal Decay benzeri basit etki)
+    # Form Effect (Temporal Decay Logic)
     h_xg *= hs["form_val"]
     a_xg *= as_["form_val"]
 
@@ -161,70 +161,67 @@ def run_ensemble_simulation(home, away, stats, avg_goals):
     hg = rng.poisson(h_xg, SIMS)
     ag = rng.poisson(a_xg, SIMS)
     
-    p1_pois = np.mean(hg > ag)
-    px_pois = np.mean(hg == ag)
-    p2_pois = np.mean(hg < ag)
+    p1_pois = np.mean(hg > ag) * 100
+    px_pois = np.mean(hg == ag) * 100
+    p2_pois = np.mean(hg < ag) * 100
 
-    # --- MODEL 2: POWER/ELO (GÜÇ ODAKLI) ---
+    # --- MODEL 2: ELO/POWER (Strength Driven) ---
     # Güç farkına dayalı lojistik bir eğri simülasyonu
     power_diff = hs["power"] - as_["power"]
-    # Sigmoid fonksiyonu ile kazanma ihtimali
-    p1_elo = 1 / (1 + np.exp(-(power_diff + 20) / 40)) # +20 Home Adv
-    p2_elo = 1 / (1 + np.exp((power_diff - 20) / 40))
+    p1_elo = 1 / (1 + np.exp(-(power_diff + 25) / 35)) # +25 Home Adv
+    p2_elo = 1 / (1 + np.exp((power_diff - 25) / 35))
     px_elo = 1 - (p1_elo + p2_elo)
-    if px_elo < 0: px_elo = 0.1 # Normalize
+    if px_elo < 0: px_elo = 0.1 
 
-    # --- META-LEARNER (CONTEXT AĞIRLIKLANDIRMA) ---
-    # Maçın karakterine göre hangi modele güveneceğiz?
+    # --- META-LEARNER (Context Weighting) ---
     w_pois = 0.60
     w_elo = 0.40
     
-    # Eğer derbi veya büyük maç ise (Güçler yakınsa), ELO daha belirleyicidir.
-    if abs(power_diff) < 15: 
+    # If derby or power difference is small, trust ELO more
+    if abs(power_diff) < 12: 
         w_pois = 0.40
-        w_elo = 0.60 # Derbide taktik ve güç konuşur, xG sapıtabilir.
+        w_elo = 0.60 
 
-    # --- ENSEMBLE SONUÇ (BİRLEŞTİRME) ---
-    p1 = (p1_pois * w_pois) + (p1_elo * w_elo)
-    p2 = (p2_pois * w_pois) + (p2_elo * w_elo)
-    px = (px_pois * w_pois) + (px_elo * w_elo)
+    # --- ENSEMBLE RESULT ---
+    p1 = (p1_pois * w_pois) + (p1_elo * 100 * w_elo)
+    p2 = (p2_pois * w_pois) + (p2_elo * 100 * w_elo)
+    px = (px_pois * w_pois) + (px_elo * 100 * w_elo)
     
-    # Toplamı 100'e tamamla
+    # Normalize
     total = p1 + p2 + px
     p1, p2, px = (p1/total)*100, (p2/total)*100, (px/total)*100
 
-    # --- QUANTUM SCENARIO ENGINE (SENARYO ANALİZİ) ---
-    # Farklı evrenlerde maç simülasyonu
+    # --- QUANTUM SCENARIO ENGINE ---
+    # Adjusting probabilities based on potential "Universes"
     universes = {
         "Normal": 0.50,
-        "Erken Gol (Kaos)": 0.20,
-        "Kırmızı Kart": 0.10,
-        "Kısır Maç (0-0)": 0.20
+        "Chaos (Early Goal)": 0.20,
+        "Red Card": 0.10,
+        "Deadlock (0-0)": 0.20
     }
     
-    # Basit bir senaryo etkisi (Örn: Kısır maçta X artar)
-    # Bu kısım sonuçları hafifçe "bükerek" gerçekçilik katar.
-    px += (universes["Kısır Maç (0-0)"] * 10) 
-    p1 -= (universes["Kısır Maç (0-0)"] * 5)
-    p2 -= (universes["Kısır Maç (0-0)"] * 5)
+    # Scenario Impact
+    px += (universes["Deadlock (0-0)"] * 8) 
+    p1 -= (universes["Deadlock (0-0)"] * 4)
+    p2 -= (universes["Deadlock (0-0)"] * 4)
     
-    # Tekrar normalize
+    # Final Normalize
     total = p1 + p2 + px
     p1, p2, px = (p1/total)*100, (p2/total)*100, (px/total)*100
 
-    # --- ÇIKTILAR ---
+    # --- OUTPUTS ---
     conf = max(p1, px, p2)
     
-    # Entropy (Belirsizlik) Hesabı
+    # Entropy (Uncertainty) Calculation
     probs_norm = np.array([p1, px, p2]) / 100
     entropy = -np.sum(probs_norm * np.log(probs_norm + 1e-9))
     
-    # Karar Mekanizması (PASS / PLAY)
+    # Decision Engine (PASS / PLAY)
     decision = "PLAY"
-    if entropy > 1.02: decision = "PASS (Riskli)"
-    elif conf < 40: decision = "PASS (Düşük Güven)"
+    if entropy > 1.03: decision = "PASS (High Risk)"
+    elif conf < 38: decision = "PASS (Low Confidence)"
 
-    # Skor Tahmini (Poisson'dan gelen)
+    # Score Prediction
     score_hash = hg * 100 + ag
     u, c = np.unique(score_hash, return_counts=True)
     best = u[np.argmax(c)]
@@ -234,15 +231,15 @@ def run_ensemble_simulation(home, away, stats, avg_goals):
     elif p2 > p1 and p2 > px: main_pred = f"{a} KAZANIR"
     else: main_pred = "BERABERLİK"
 
-    # Ekstra Marketler
+    # Expanded Markets
     dc_1x = p1 + px
     dc_x2 = px + p2
     total_goals = hg + ag
     o25 = np.mean(total_goals > 2.5) * 100
     btts = np.mean((hg > 0) & (ag > 0)) * 100
     
-    # Yorum Üretici (Explainable AI)
-    reason = "Güç farkı ve saha avantajı belirleyici oldu."
+    # Explainable AI Reason
+    reason = "Güç farkı ve saha avantajı belirleyici."
     if w_elo > w_pois: reason = "Kritik maç olduğu için Güç Dengesi (ELO) modeline öncelik verildi."
     if entropy > 1.0: reason = "Modeller arasında fikir ayrılığı var (Yüksek Entropi). Sürpriz ihtimali."
 
@@ -281,9 +278,10 @@ def main():
     with st.spinner("Veri tabanına bağlanılıyor..."):
         data = fetch_data(league_code)
     
+    # --- ERROR FIX: MAÇ YOKSA ÇÖKMEZ, UYARI VERİR ---
     if not data or not data.get('matches'): 
-        st.warning("⚠️ Bu lig için veri alınamadı. Başka lig seçiniz.")
-        return
+        st.warning("⚠️ Bu ligde önümüzdeki günlerde planlanmış maç bulunamadı. Lütfen başka bir lig seçin.")
+        return # Kodun geri kalanını çalıştırma, burada dur.
 
     # İSTATİSTİK HAZIRLAMA (v30 Power Calculation)
     table = data["standings"]["standings"][0]["table"]
@@ -302,7 +300,6 @@ def main():
         form_val = np.mean([{"W":1.1,"D":1.0,"L":0.9}.get(x, 1.0) for x in form.replace(",","")])
 
         # Power Rating (v30 - Gelişmiş)
-        # Puan + Gol Averajı + Form kombinasyonu
         gd = t["goalsFor"] - t["goalsAgainst"]
         power = 100 + (pts/played * 20) + (gd/played * 5) + (form_val * 10)
 
@@ -314,8 +311,14 @@ def main():
             "home_factor": 1.12, "away_factor": 0.88
         }
 
+    # Maçları filtrele
     matches = {f'{m["homeTeam"]["name"]} - {m["awayTeam"]["name"]}': m for m in data["matches"]["matches"] if m["status"] == "SCHEDULED"}
     
+    # --- ERROR FIX 2: FİLTRE SONRASI BOŞSA UYAR ---
+    if not matches:
+        st.warning("⚠️ Bu ligde 'Planlanmış' (Scheduled) statüsünde maç bulunamadı. Lig tatile girmiş olabilir.")
+        return
+
     with c2:
         game = st.selectbox("MAÇ SEÇ", list(matches.keys()))
 
@@ -336,7 +339,7 @@ def main():
 
     if st.button("QUANTUM ANALİZİ BAŞLAT", use_container_width=True):
         m = matches[game]
-        # Progress Bar Efekti (Steps: Data -> Models -> Meta-Learn -> Scenarios)
+        # Progress Bar Efekti
         bar = st.progress(0)
         for i in range(100):
             time.sleep(0.005)
@@ -346,7 +349,7 @@ def main():
         res = run_ensemble_simulation(m["homeTeam"]["name"], m["awayTeam"]["name"], stats, avg_goals)
 
         if res:
-            # KARAR BADGE (PLAY / PASS)
+            # DECISION BADGE (PLAY / PASS)
             dec_class = "decision-play" if "PLAY" in res["decision"] else "decision-pass"
             st.markdown(f"<div style='text-align:center; margin-bottom:15px;'><span class='{dec_class}'>AI KARARI: {res['decision']}</span></div>", unsafe_allow_html=True)
 
