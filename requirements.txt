@@ -4,3 +4,4 @@ numpy
 requests
 qiskit
 qiskit-aer
+lxml
