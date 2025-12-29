@@ -8,8 +8,8 @@ from datetime import datetime, timedelta
 # 1. AYARLAR VE STİL
 # -----------------------------------------------------------------------------
 st.set_page_config(
-    page_title="Quantum v14: Momentum",
-    page_icon="📈",
+    page_title="Quantum v15: The Ticket",
+    page_icon="🎫",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -18,13 +18,70 @@ st.markdown("""
     <style>
     .stApp {background-color: #0f172a;}
     .stat-card {background-color: #1e293b; padding: 20px; border-radius: 12px; border: 1px solid #334155; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);}
+    
+    /* --- YENİ KUPON KARTI TASARIMI (TICKET CSS) --- */
+    .ticket-container {
+        background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+        border: 2px solid #00ff88;
+        border-radius: 15px;
+        padding: 20px;
+        position: relative;
+        margin-top: 20px;
+        box-shadow: 0 0 20px rgba(0, 255, 136, 0.2);
+        max-width: 500px;
+        margin-left: auto;
+        margin-right: auto;
+    }
+    .ticket-header {
+        border-bottom: 2px dashed #334155;
+        padding-bottom: 10px;
+        margin-bottom: 15px;
+        text-align: center;
+        color: #00ff88;
+        font-family: 'Courier New', monospace;
+        font-weight: bold;
+        letter-spacing: 2px;
+    }
+    .ticket-body {
+        text-align: center;
+        color: white;
+    }
+    .ticket-match {
+        font-size: 1.2rem;
+        font-weight: bold;
+        margin-bottom: 10px;
+    }
+    .ticket-prediction {
+        font-size: 2rem;
+        font-weight: 900;
+        color: #facc15; /* Sarı */
+        margin: 10px 0;
+        text-shadow: 0 2px 4px rgba(0,0,0,0.5);
+    }
+    .ticket-confidence {
+        color: #94a3b8;
+        font-size: 0.9rem;
+    }
+    .ticket-footer {
+        margin-top: 15px;
+        border-top: 2px dashed #334155;
+        padding-top: 10px;
+        text-align: center;
+        font-size: 0.8rem;
+        color: #64748b;
+        font-family: 'Courier New', monospace;
+    }
+    .barcode {
+        font-family: 'Libre Barcode 39 Text', cursive; /* Google Font eklenebilir ama şimdilik temsili */
+        font-size: 2rem;
+        opacity: 0.5;
+        letter-spacing: 5px;
+    }
+    
+    /* Renkler */
     .win-green {color: #4ade80; font-weight: bold;}
     .loss-red {color: #f87171; font-weight: bold;}
     .draw-yellow {color: #fbbf24; font-weight: bold;}
-    .big-number {font-size: 28px; font-weight: 800; color: white;}
-    .sub-text {font-size: 14px; color: #94a3b8;}
-    /* Grafik Arka Planı */
-    canvas {background-color: #1e293b; border-radius: 10px; padding: 10px;}
     </style>
     """, unsafe_allow_html=True)
 
@@ -73,8 +130,6 @@ def fetch_tff_data_hybrid():
                 standings_table.append({
                     "position": index + 1, "team": {"name": team_name},
                     "playedGames": int(row.get('O', 0)), 
-                    # TFF'den gerçek form verisi çekilemediği için görsel amaçlı nötr bırakıyoruz
-                    # İleride burası geliştirilebilir
                     "form": "W,D,W,L,D", 
                     "goalsFor": int(row.get('A', 0)), "goalsAgainst": int(row.get('Y', 0)),
                     "points": int(row.get('P', 0))
@@ -109,33 +164,21 @@ def fetch_data(league_code):
     except: return None
 
 # -----------------------------------------------------------------------------
-# 3. YENİ ÖZELLİK: MOMENTUM GRAFİĞİ 📈
+# 3. ANALİZ MOTORU & MOMENTUM
 # -----------------------------------------------------------------------------
 def get_momentum_data(form_str):
-    """ 'W,L,D,W,W' formatındaki formu sayısal grafiğe çevirir. """
     if not form_str: return [0, 0, 0, 0, 0]
-    
-    # Virgülleri temizle
     form_str = form_str.replace(',', '')
-    # Son 5 maçı al
     last_5 = form_str[-5:] if len(form_str) >= 5 else form_str
-    
-    points = []
-    current_score = 0
-    # Başlangıç noktası
-    points.append(0) 
-    
+    points = [0]
+    current = 0
     for char in last_5:
-        if char == 'W': current_score += 3  # Galibiyet: Yükseliş
-        elif char == 'D': current_score += 1 # Beraberlik: Hafif yükseliş
-        elif char == 'L': current_score -= 1 # Mağlubiyet: Düşüş (Daha dramatik görünmesi için -1)
-        points.append(current_score)
-        
+        if char == 'W': current += 3
+        elif char == 'D': current += 1
+        elif char == 'L': current -= 1
+        points.append(current)
     return points
 
-# -----------------------------------------------------------------------------
-# 4. ANALİZ MOTORU
-# -----------------------------------------------------------------------------
 def analyze_teams(data):
     stats = {}
     avg_goals = 1.5
@@ -153,7 +196,6 @@ def analyze_teams(data):
             if form_str:
                 score = sum({'W':1.1, 'D':1.0, 'L':0.9}.get(c, 1.0) for c in form_str)
                 form_val = score / len(form_str)
-            # İstatistiklere ham form stringini de ekliyoruz (Grafik için)
             stats[name] = {
                 'att': (t['goalsFor']/played)/avg_goals if played>0 else 1, 
                 'def': (t['goalsAgainst']/played)/avg_goals if played>0 else 1, 
@@ -202,21 +244,31 @@ def simulate_value_bet(home, away, stats, avg_goals, league_code):
     
     total_goals = h_goals + a_goals
     
+    # KUPON İÇİN ANA TAHMİNİ BELİRLE
+    main_prediction = "BELİRSİZ"
+    if max_prob == prob_1: main_prediction = f"{home} KAZANIR (MS 1)"
+    elif max_prob == prob_2: main_prediction = f"{away} KAZANIR (MS 2)"
+    else: main_prediction = "BERABERLİK (MS 0)"
+    
+    # Alternatif (Güvenli) Tahmin
+    alt_prediction = "YOK"
+    if (np.sum(total_goals > 1.5)/SIMS)*100 > 75: alt_prediction = "1.5 ÜST"
+    elif (np.sum((h_goals>0)&(a_goals>0))/SIMS)*100 > 60: alt_prediction = "KG VAR"
+    
     return {
         'probs': {'1': prob_1, 'X': prob_x, '2': prob_2},
         'fair_odds': {'1': fair_odd_1, 'X': fair_odd_x, '2': fair_odd_2},
         'goals': {'o25': (np.sum(total_goals > 2.5)/SIMS)*100, 'btts': (np.sum((h_goals>0)&(a_goals>0))/SIMS)*100},
-        'xg': {'h': total_h_xg, 'a': total_a_xg},
         'stake': stake_advice,
-        # Form verilerini de döndür
-        'forms': {'h': h['form_str'], 'a': a['form_str']}
+        'forms': {'h': h['form_str'], 'a': a['form_str']},
+        'ticket': {'main': main_prediction, 'alt': alt_prediction, 'conf': max_prob}
     }
 
 # -----------------------------------------------------------------------------
-# 5. ARAYÜZ
+# 5. ARAYÜZ (MAIN)
 # -----------------------------------------------------------------------------
 def main():
-    st.sidebar.title("💎 Quantum v14")
+    st.sidebar.title("💎 Quantum v15")
     league_name = st.sidebar.selectbox("Lig Seç:", list(LEAGUES.keys()))
     league_code = LEAGUES[league_name]
     
@@ -239,48 +291,55 @@ def main():
     m_data = matches[selected]
     h, a = m_data['homeTeam']['name'], m_data['awayTeam']['name']
     
-    if st.button("🚀 Momentum Analizi Yap"):
+    if st.button("🎫 Kuponu Oluştur"):
         res = simulate_value_bet(h, a, stats, avg_goals, league_code)
         if res:
-            # --- 1. ÜST BÖLÜM: ORANLAR VE KASA ---
-            c1, c2, c3 = st.columns(3)
-            c1.markdown(f"<div class='stat-card'><h3>{h}</h3><h1 class='win-green'>%{res['probs']['1']:.1f}</h1><p>Adil Oran: <b>{res['fair_odds']['1']:.2f}</b></p></div>", unsafe_allow_html=True)
-            c2.markdown(f"<div class='stat-card'><h3>Beraberlik</h3><h1 class='draw-yellow'>%{res['probs']['X']:.1f}</h1><p>Adil Oran: <b>{res['fair_odds']['X']:.2f}</b></p></div>", unsafe_allow_html=True)
-            c3.markdown(f"<div class='stat-card'><h3>{a}</h3><h1 class='loss-red'>%{res['probs']['2']:.1f}</h1><p>Adil Oran: <b>{res['fair_odds']['2']:.2f}</b></p></div>", unsafe_allow_html=True)
+            # --- 1. KUPON KARTI (YENİ ÖZELLİK) ---
+            st.markdown(f"""
+            <div class="ticket-container">
+                <div class="ticket-header">QUANTUM INTELLIGENCE TICKET</div>
+                <div class="ticket-body">
+                    <div class="ticket-match">{h} vs {a}</div>
+                    <div class="ticket-confidence">ÖNERİLEN TAHMİN</div>
+                    <div class="ticket-prediction">{res['ticket']['main']}</div>
+                    
+                    <div style="display: flex; justify-content: space-around; margin-top: 15px;">
+                        <div>
+                            <div class="ticket-confidence">GÜVEN</div>
+                            <div style="color: #00ff88; font-weight: bold;">%{res['ticket']['conf']:.1f}</div>
+                        </div>
+                        <div>
+                            <div class="ticket-confidence">ADİL ORAN</div>
+                            <div style="color: #00ff88; font-weight: bold;">{res['fair_odds']['1'] if 'MS 1' in res['ticket']['main'] else res['fair_odds']['2'] if 'MS 2' in res['ticket']['main'] else res['fair_odds']['X']:.2f}</div>
+                        </div>
+                        <div>
+                            <div class="ticket-confidence">ALTERNATİF</div>
+                            <div style="color: #fbbf24; font-weight: bold;">{res['ticket']['alt']}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="ticket-footer">
+                    <div class="barcode">||| || ||| | |||| |||</div>
+                    <div>{datetime.now().strftime("%d.%m.%Y • %H:%M")}</div>
+                    <div>ID: {str(int(res['ticket']['conf']*12345))}</div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
             
             st.write("")
+            st.markdown("---")
+
+            # --- 2. DETAYLI VERİLER ---
+            c1, c2, c3 = st.columns(3)
+            c1.metric(f"{h}", f"%{res['probs']['1']:.1f}")
+            c2.metric("Beraberlik", f"%{res['probs']['X']:.1f}")
+            c3.metric(f"{a}", f"%{res['probs']['2']:.1f}")
             
-            # --- 2. YENİ BÖLÜM: MOMENTUM GRAFİĞİ ---
-            st.subheader("📈 Takım Momentum Grafiği (Son 5 Maç)")
-            st.caption("Takımların son maçlardaki form durumunu gösterir. Yükselen çizgi formda olduğunu işaret eder.")
-            
-            # Form verilerini sayısal grafiğe dök
+            st.subheader("📈 Momentum Grafiği")
             h_mom = get_momentum_data(res['forms']['h'])
             a_mom = get_momentum_data(res['forms']['a'])
+            st.line_chart(pd.DataFrame({h: h_mom, a: a_mom}), color=["#4ade80", "#f87171"])
             
-            # Pandas DataFrame oluştur (Streamlit grafiği için)
-            chart_data = pd.DataFrame({
-                h: h_mom,
-                a: a_mom
-            })
-            
-            # Çizgi grafiği çiz
-            st.line_chart(chart_data, color=["#4ade80", "#f87171"]) # Ev sahibi Yeşil, Deplasman Kırmızı
-            
-            st.markdown("---")
-            
-            # --- 3. ALT BÖLÜM: VALUE VE GOLLER ---
-            col_stake, col_goal = st.columns(2)
-            with col_stake:
-                st.markdown(f"### 💼 Kasa Yönetimi")
-                st.markdown(f"Güven Seviyesi: <b style='color:#00ff88'>{res['stake']}</b>", unsafe_allow_html=True)
-                st.info("Eğer bahis sitelerindeki oran, yukarıdaki **Adil Oran**'dan yüksekse bu 'Değerli Bahis'tir.")
-                
-            with col_goal:
-                st.markdown("### 🥅 Gol Beklentisi")
-                st.write(f"**2.5 Üst:** %{res['goals']['o25']:.1f}")
-                st.write(f"**KG Var:** %{res['goals']['btts']:.1f}")
-
         else:
             st.error("Veri yetersiz.")
 
