@@ -29,7 +29,8 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # API
-API_KEY = st.secrets["FOOTBALL_API_KEY"]
+import os
+API_KEY = os.environ.get("FOOTBALL_API_KEY")
 HEADERS = {'X-Auth-Token': API_KEY}
 BASE_URL = 'https://api.football-data.org/v4'
 
@@ -316,3 +317,4 @@ def main():
 if __name__ == "__main__":
 
     main()
+
