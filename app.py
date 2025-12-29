@@ -8,8 +8,8 @@ from datetime import datetime, timedelta
 # 1. AYARLAR VE STİL
 # -----------------------------------------------------------------------------
 st.set_page_config(
-    page_title="Quantum v13: Value Hunter",
-    page_icon="💎",
+    page_title="Quantum v14: Momentum",
+    page_icon="📈",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -21,10 +21,10 @@ st.markdown("""
     .win-green {color: #4ade80; font-weight: bold;}
     .loss-red {color: #f87171; font-weight: bold;}
     .draw-yellow {color: #fbbf24; font-weight: bold;}
-    .value-bet {color: #facc15; font-weight: 800; font-size: 1.2rem;}
     .big-number {font-size: 28px; font-weight: 800; color: white;}
     .sub-text {font-size: 14px; color: #94a3b8;}
-    div[data-testid="stTable"] {background-color: #1e293b; border-radius: 10px;}
+    /* Grafik Arka Planı */
+    canvas {background-color: #1e293b; border-radius: 10px; padding: 10px;}
     </style>
     """, unsafe_allow_html=True)
 
@@ -33,17 +33,9 @@ API_KEY = '741fe4cfaf31419a864d7b6777b23862'
 HEADERS = {'X-Auth-Token': API_KEY}
 BASE_URL = 'https://api.football-data.org/v4'
 
-# R10 Dersi: Lig Karakteristikleri (League Multipliers)
-# Bazı ligler daha gollü, bazıları daha defansiftir.
 LEAGUE_MULTIPLIERS = {
-    'PL': 1.05,  # Premier League (Tempolu)
-    'TR1': 1.02, # Süper Lig (Kaotik ama gollü)
-    'PD': 0.95,  # La Liga (Taktiksel)
-    'BL1': 1.20, # Bundesliga (Gol makinesi)
-    'SA': 1.00,  # Serie A (Dengeli)
-    'FL1': 0.90, # Ligue 1 (Daha defansif/Fiziksel)
-    'DED': 1.15, # Eredivisie (Çok gollü)
-    'CL': 1.00   # Şampiyonlar Ligi
+    'PL': 1.05, 'TR1': 1.02, 'PD': 0.95, 'BL1': 1.20,
+    'SA': 1.00, 'FL1': 0.90, 'DED': 1.15, 'CL': 1.00
 }
 
 LEAGUES = {
@@ -53,7 +45,7 @@ LEAGUES = {
 }
 
 # -----------------------------------------------------------------------------
-# 2. VERİ ÇEKME (HİBRİT)
+# 2. VERİ ÇEKME
 # -----------------------------------------------------------------------------
 def fetch_tff_data_hybrid():
     try:
@@ -80,7 +72,10 @@ def fetch_tff_data_hybrid():
 
                 standings_table.append({
                     "position": index + 1, "team": {"name": team_name},
-                    "playedGames": int(row.get('O', 0)), "form": "WWWWW",
+                    "playedGames": int(row.get('O', 0)), 
+                    # TFF'den gerçek form verisi çekilemediği için görsel amaçlı nötr bırakıyoruz
+                    # İleride burası geliştirilebilir
+                    "form": "W,D,W,L,D", 
                     "goalsFor": int(row.get('A', 0)), "goalsAgainst": int(row.get('Y', 0)),
                     "points": int(row.get('P', 0))
                 })
@@ -114,7 +109,32 @@ def fetch_data(league_code):
     except: return None
 
 # -----------------------------------------------------------------------------
-# 3. ANALİZ VE SİMÜLASYON
+# 3. YENİ ÖZELLİK: MOMENTUM GRAFİĞİ 📈
+# -----------------------------------------------------------------------------
+def get_momentum_data(form_str):
+    """ 'W,L,D,W,W' formatındaki formu sayısal grafiğe çevirir. """
+    if not form_str: return [0, 0, 0, 0, 0]
+    
+    # Virgülleri temizle
+    form_str = form_str.replace(',', '')
+    # Son 5 maçı al
+    last_5 = form_str[-5:] if len(form_str) >= 5 else form_str
+    
+    points = []
+    current_score = 0
+    # Başlangıç noktası
+    points.append(0) 
+    
+    for char in last_5:
+        if char == 'W': current_score += 3  # Galibiyet: Yükseliş
+        elif char == 'D': current_score += 1 # Beraberlik: Hafif yükseliş
+        elif char == 'L': current_score -= 1 # Mağlubiyet: Düşüş (Daha dramatik görünmesi için -1)
+        points.append(current_score)
+        
+    return points
+
+# -----------------------------------------------------------------------------
+# 4. ANALİZ MOTORU
 # -----------------------------------------------------------------------------
 def analyze_teams(data):
     stats = {}
@@ -133,7 +153,15 @@ def analyze_teams(data):
             if form_str:
                 score = sum({'W':1.1, 'D':1.0, 'L':0.9}.get(c, 1.0) for c in form_str)
                 form_val = score / len(form_str)
-            stats[name] = {'att': (t['goalsFor']/played)/avg_goals if played>0 else 1, 'def': (t['goalsAgainst']/played)/avg_goals if played>0 else 1, 'form': form_val, 'rank': t['position'], 'bonus': 0}
+            # İstatistiklere ham form stringini de ekliyoruz (Grafik için)
+            stats[name] = {
+                'att': (t['goalsFor']/played)/avg_goals if played>0 else 1, 
+                'def': (t['goalsAgainst']/played)/avg_goals if played>0 else 1, 
+                'form_val': form_val, 
+                'form_str': raw_form,
+                'rank': t['position'], 
+                'bonus': 0
+            }
             
     if data and data.get('scorers'):
         for p in data['scorers']['scorers']:
@@ -144,14 +172,12 @@ def simulate_value_bet(home, away, stats, avg_goals, league_code):
     if home not in stats or away not in stats: return None
     h, a = stats[home], stats[away]
     
-    # R10 Dersi: Lig Çarpanını Uygula
     league_factor = LEAGUE_MULTIPLIERS.get(league_code, 1.0)
     
-    # xG Hesapla
-    total_h_xg = h['att'] * a['def'] * avg_goals * 1.15 * h['form'] * (1 + h['bonus']) * league_factor
-    total_a_xg = a['att'] * h['def'] * avg_goals * a['form'] * (1 + a['bonus']) * league_factor
+    total_h_xg = h['att'] * a['def'] * avg_goals * 1.15 * h['form_val'] * (1 + h['bonus']) * league_factor
+    total_a_xg = a['att'] * h['def'] * avg_goals * a['form_val'] * (1 + a['bonus']) * league_factor
     
-    SIMS = 50000
+    SIMS = 30000
     rng = np.random.default_rng()
     h_goals = rng.poisson(total_h_xg, SIMS)
     a_goals = rng.poisson(total_a_xg, SIMS)
@@ -164,14 +190,10 @@ def simulate_value_bet(home, away, stats, avg_goals, league_code):
     prob_x = (draws/SIMS)*100
     prob_2 = (away_wins/SIMS)*100
     
-    # R10 Dersi: "Adil Oran" Hesaplama (Fair Odds)
-    # 100 / Olasılık = Oran. (Örn: %50 ihtimal = 2.00 oran)
     fair_odd_1 = 100 / prob_1 if prob_1 > 0 else 0
     fair_odd_x = 100 / prob_x if prob_x > 0 else 0
     fair_odd_2 = 100 / prob_2 if prob_2 > 0 else 0
     
-    # Kasa Yönetimi (Stake) Tavsiyesi
-    # Kelly Kriterinin basitleştirilmiş hali: Olasılık ne kadar yüksekse o kadar güven.
     max_prob = max(prob_1, prob_x, prob_2)
     stake_advice = "Düşük (%1)"
     if max_prob > 70: stake_advice = "Yüksek (%5)"
@@ -179,25 +201,28 @@ def simulate_value_bet(home, away, stats, avg_goals, league_code):
     elif max_prob > 45: stake_advice = "Düşük-Orta (%2)"
     
     total_goals = h_goals + a_goals
+    
     return {
         'probs': {'1': prob_1, 'X': prob_x, '2': prob_2},
         'fair_odds': {'1': fair_odd_1, 'X': fair_odd_x, '2': fair_odd_2},
         'goals': {'o25': (np.sum(total_goals > 2.5)/SIMS)*100, 'btts': (np.sum((h_goals>0)&(a_goals>0))/SIMS)*100},
         'xg': {'h': total_h_xg, 'a': total_a_xg},
-        'stake': stake_advice
+        'stake': stake_advice,
+        # Form verilerini de döndür
+        'forms': {'h': h['form_str'], 'a': a['form_str']}
     }
 
 # -----------------------------------------------------------------------------
-# 4. ARAYÜZ
+# 5. ARAYÜZ
 # -----------------------------------------------------------------------------
 def main():
-    st.sidebar.title("💎 Quantum v13: Value")
+    st.sidebar.title("💎 Quantum v14")
     league_name = st.sidebar.selectbox("Lig Seç:", list(LEAGUES.keys()))
     league_code = LEAGUES[league_name]
     
-    st.title(f"Quantum Value Hunter: {league_name}")
+    st.title(f"Quantum Analiz: {league_name}")
     
-    with st.spinner("Piyasalar taranıyor..."):
+    with st.spinner("Piyasalar ve momentum analiz ediliyor..."):
         data = fetch_data(league_code)
     
     if not data or not data.get('matches'):
@@ -214,31 +239,47 @@ def main():
     m_data = matches[selected]
     h, a = m_data['homeTeam']['name'], m_data['awayTeam']['name']
     
-    if st.button("💎 Değer Analizi Yap"):
+    if st.button("🚀 Momentum Analizi Yap"):
         res = simulate_value_bet(h, a, stats, avg_goals, league_code)
         if res:
-            # ÜST BİLGİ KARTLARI
+            # --- 1. ÜST BÖLÜM: ORANLAR VE KASA ---
             c1, c2, c3 = st.columns(3)
             c1.markdown(f"<div class='stat-card'><h3>{h}</h3><h1 class='win-green'>%{res['probs']['1']:.1f}</h1><p>Adil Oran: <b>{res['fair_odds']['1']:.2f}</b></p></div>", unsafe_allow_html=True)
             c2.markdown(f"<div class='stat-card'><h3>Beraberlik</h3><h1 class='draw-yellow'>%{res['probs']['X']:.1f}</h1><p>Adil Oran: <b>{res['fair_odds']['X']:.2f}</b></p></div>", unsafe_allow_html=True)
             c3.markdown(f"<div class='stat-card'><h3>{a}</h3><h1 class='loss-red'>%{res['probs']['2']:.1f}</h1><p>Adil Oran: <b>{res['fair_odds']['2']:.2f}</b></p></div>", unsafe_allow_html=True)
             
+            st.write("")
+            
+            # --- 2. YENİ BÖLÜM: MOMENTUM GRAFİĞİ ---
+            st.subheader("📈 Takım Momentum Grafiği (Son 5 Maç)")
+            st.caption("Takımların son maçlardaki form durumunu gösterir. Yükselen çizgi formda olduğunu işaret eder.")
+            
+            # Form verilerini sayısal grafiğe dök
+            h_mom = get_momentum_data(res['forms']['h'])
+            a_mom = get_momentum_data(res['forms']['a'])
+            
+            # Pandas DataFrame oluştur (Streamlit grafiği için)
+            chart_data = pd.DataFrame({
+                h: h_mom,
+                a: a_mom
+            })
+            
+            # Çizgi grafiği çiz
+            st.line_chart(chart_data, color=["#4ade80", "#f87171"]) # Ev sahibi Yeşil, Deplasman Kırmızı
+            
             st.markdown("---")
             
-            # VALUE BET ANALİZİ (Değerli Bahis)
-            st.subheader("🤑 Value (Değer) Dedektörü")
-            st.info(f"💡 **Nasıl Kullanılır?** Bahis sitesindeki orana bak. Eğer senin siten, yukarıdaki **'Adil Oran'dan** DAHA YÜKSEK bir oran veriyorsa (Örn: AI 1.50 diyor, Site 1.80 veriyor), bu matematiksel olarak kazandıran bir bahistir.")
-            
+            # --- 3. ALT BÖLÜM: VALUE VE GOLLER ---
             col_stake, col_goal = st.columns(2)
             with col_stake:
-                st.markdown(f"### 💼 Kasa Yönetimi Tavsiyesi")
-                st.markdown(f"Bu maçtaki matematiksel güven seviyesine göre önerilen bahis miktarı:")
-                st.markdown(f"<h2 style='color:#00ff88'>{res['stake']}</h2>", unsafe_allow_html=True)
+                st.markdown(f"### 💼 Kasa Yönetimi")
+                st.markdown(f"Güven Seviyesi: <b style='color:#00ff88'>{res['stake']}</b>", unsafe_allow_html=True)
+                st.info("Eğer bahis sitelerindeki oran, yukarıdaki **Adil Oran**'dan yüksekse bu 'Değerli Bahis'tir.")
                 
             with col_goal:
-                st.markdown("### 🥅 Gol Tahminleri")
-                st.write(f"**2.5 Üst:** %{res['goals']['o25']:.1f} (Adil Oran: {100/res['goals']['o25'] if res['goals']['o25']>0 else 0:.2f})")
-                st.write(f"**KG Var:** %{res['goals']['btts']:.1f} (Adil Oran: {100/res['goals']['btts'] if res['goals']['btts']>0 else 0:.2f})")
+                st.markdown("### 🥅 Gol Beklentisi")
+                st.write(f"**2.5 Üst:** %{res['goals']['o25']:.1f}")
+                st.write(f"**KG Var:** %{res['goals']['btts']:.1f}")
 
         else:
             st.error("Veri yetersiz.")
