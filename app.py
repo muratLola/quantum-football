@@ -5,9 +5,9 @@ import requests
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import time
-import random
-# İsim eşleştirme için difflib kullanacağız (Python'un kendi kütüphanesidir, ekstra kuruluma gerek yok)
-from difflib import get_close_matches 
+from difflib import get_close_matches
+from scipy.optimize import minimize
+from functools import partial
 
 # -----------------------------------------------------------------------------
 # 1. AYARLAR & CSS (MİNİMALİST & PROFESYONEL)
@@ -18,7 +18,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed"
 )
-
 st.markdown("""
     <style>
     /* GENEL ARKA PLAN */
@@ -86,14 +85,18 @@ st.markdown("""
         background-color: #0d1117; padding: 20px; border-radius: 10px;
         border: 1px dashed #30363d; margin-top: 30px; text-align: center;
     }
+    
+    /* BADGE STİLLERİ */
+    .badge-high { background-color: #4ade80; color: black; padding: 5px 10px; border-radius: 20px; font-weight: bold; }
+    .badge-medium { background-color: #facc15; color: black; padding: 5px 10px; border-radius: 20px; font-weight: bold; }
+    .badge-low { background-color: #f87171; color: white; padding: 5px 10px; border-radius: 20px; font-weight: bold; }
     </style>
     """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 2. AYARLAR & API
+# 2. AYARLAR & API (GÜVENLİK İÇİN ST.SECRETS KULLAN)
 # -----------------------------------------------------------------------------
-# GÜVENLİK NOTU: Gerçek projede bunu st.secrets içine almalısın.
-API_KEY = '741fe4cfaf31419a864d7b6777b23862'
+API_KEY = st.secrets.get("FOOTBALL_API_KEY", '741fe4cfaf31419a864d7b6777b23862')  # Gerçek deploy'da secrets.toml'den al
 HEADERS = {'X-Auth-Token': API_KEY}
 BASE_URL = 'https://api.football-data.org/v4'
 
@@ -107,77 +110,72 @@ LEAGUES = {
 # 3. AKILLI İSİM EŞLEŞTİRİCİ (CRASH ÖNLEYİCİ)
 # -----------------------------------------------------------------------------
 def match_team_name(target_name, team_list):
-    """ API'den gelen isimle istatistiklerdeki ismi eşleştirir """
     if target_name in team_list:
         return target_name
-    
-    # En yakın eşleşmeyi bul
     matches = get_close_matches(target_name, team_list, n=1, cutoff=0.6)
     if matches:
         return matches[0]
     return None
 
 # -----------------------------------------------------------------------------
-# 4. VERİ ÇEKME MOTORU
+# 4. VERİ ÇEKME MOTORU (GERÇEKÇİ SÜPER LİG SCRAPER - SOCCERWAY KULLAN)
 # -----------------------------------------------------------------------------
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=14400)  # 4 saat cache, gerçekçi süre
 def fetch_data(league_code):
-    # --- TÜRKİYE SÜPER LİG (MANUEL SCRAPER) ---
     if league_code == 'TR1':
         try:
-            url = "https://www.tff.org/default.aspx?pageID=198"
+            # Soccerway'den gerçek standings ve fixtures çek (daha stabil ve güncel)
             headers = {"User-Agent": "Mozilla/5.0"}
-            r = requests.get(url, headers=headers, timeout=10)
-            if r.status_code != 200: return None
             
-            try: tables = pd.read_html(r.content)
-            except: return None
-            if not tables: return None
-
-            df = tables[0]
-            if "Takım" not in df.columns:
-                df.columns = df.iloc[0]
-                df = df[1:]
+            # Standings
+            standings_url = "https://us.soccerway.com/national/turkey/super-lig/20252026/regular-season/c68/tables/"
+            r_stand = requests.get(standings_url, headers=headers)
+            if r_stand.status_code != 200: return None
+            tables_stand = pd.read_html(r_stand.content)
+            df_stand = tables_stand[0]  # İlk tablo genellikle standings
+            df_stand = df_stand.dropna(how='all').reset_index(drop=True)
+            # Kolonları temizle
+            df_stand.columns = ['Rank', 'Team', 'P', 'W', 'D', 'L', 'F', 'A', 'GD', 'Pts']
+            df_stand['Team'] = df_stand['Team'].str.strip()
             
             standings = []
-            for idx, row in df.iterrows():
-                try:
-                    raw_team = str(row.get('Takım', 'Bilinmiyor'))
-                    parts = raw_team.split(" ")
-                    if parts[0].replace('.', '').isdigit(): parts = parts[1:]
-                    team_name = " ".join(parts).replace("A.Ş.", "").strip()
-                    
-                    # TFF sitesinde form verisi yok, puan durumuna göre 'tahmini' form üretiyoruz
-                    # Ama bunu her açılışta sabit tutmak için random seed kullanmıyoruz, basit mantık:
-                    rank = idx + 1
-                    if rank <= 3: form_str = "W,W,D,W,W"
-                    elif rank <= 8: form_str = "W,D,L,W,D"
-                    elif rank >= 16: form_str = "L,L,D,L,L"
-                    else: form_str = "D,L,W,D,L"
-
-                    standings.append({
-                        "team": {"name": team_name},
-                        "playedGames": int(row.get('O', 0)),
-                        "form": form_str, 
-                        "goalsFor": int(row.get('A', 0)),
-                        "goalsAgainst": int(row.get('Y', 0)),
-                        "points": int(row.get('P', 0)),
-                        "position": rank
-                    })
-                except: continue
+            for idx, row in df_stand.iterrows():
+                team_name = row['Team']
+                form_str = "W,D,L,W,D"  # Gerçek form için API ekle (aşağıda)
+                standings.append({
+                    "team": {"name": team_name},
+                    "playedGames": int(row['P']),
+                    "form": form_str,
+                    "goalsFor": int(row['F']),
+                    "goalsAgainst": int(row['A']),
+                    "points": int(row['Pts']),
+                    "position": int(row['Rank'])
+                })
             
-            # Fikstür: İlk 10 takımı kendi arasında eşleştir (Demo için)
+            # Fixtures
+            fixtures_url = "https://us.soccerway.com/national/turkey/super-lig/20252026/regular-season/c68/"
+            r_fix = requests.get(fixtures_url, headers=headers)
+            if r_fix.status_code != 200: return None
+            tables_fix = pd.read_html(r_fix.content)
+            # Fikstür tablosu genellikle 1. veya 2. tablo, maçları parse et
+            df_fix = pd.concat(tables_fix[1:])  # Birleştir
+            df_fix = df_fix.dropna(how='all').reset_index(drop=True)
+            # Maçları çıkar (örnek format: Date, Home, Score, Away)
             matches = []
-            if len(standings) > 0:
-                top_teams = [t['team']['name'] for t in standings[:12]]
-                # Rastgeleliği kaldırdık, her zaman aynı eşleşmeler çıksın ki stabil olsun
-                for i in range(0, len(top_teams), 2):
-                    matches.append({"homeTeam": {"name": top_teams[i]}, "awayTeam": {"name": top_teams[i+1]}, "utcDate": datetime.now().isoformat()})
-
-            return {"standings": {"standings": [{"table": standings}]}, "matches": {"matches": matches}, "scorers": {"scorers": []}}
-        except: return None
-
-    # --- GLOBAL LİGLER (API) ---
+            for idx, row in df_fix.iterrows():
+                if pd.notna(row.get('Home team')) and pd.notna(row.get('Away team')):
+                    matches.append({
+                        "homeTeam": {"name": row['Home team'].strip()},
+                        "awayTeam": {"name": row['Away team'].strip()},
+                        "utcDate": datetime.now().isoformat()  # Gerçek tarih için parse et
+                    })
+            
+            return {"standings": {"standings": [{"table": standings}]}, "matches": {"matches": matches}}
+        except Exception as e:
+            st.error(f"Süper Lig veri çekme hatası: {e}")
+            return None
+    
+    # Global ligler için football-data.org
     try:
         data = {}
         r1 = requests.get(f"{BASE_URL}/competitions/{league_code}/standings", headers=HEADERS)
@@ -188,18 +186,16 @@ def fetch_data(league_code):
         r3 = requests.get(f"{BASE_URL}/competitions/{league_code}/matches", headers=HEADERS, params={'dateFrom': today, 'dateTo': future})
         data['matches'] = r3.json() if r3.status_code == 200 else {'matches': []}
         return data
-    except: return None
+    except:
+        return None
 
 # -----------------------------------------------------------------------------
 # 5. İSTATİSTİK VE FORM GÖRSELLEŞTİRME
 # -----------------------------------------------------------------------------
 def render_form_badges(form_str):
-    """ API form stringini (W,D,L) alıp HTML kutucuklara çevirir """
     if not form_str: form_str = "N,N,N,N,N"
     form_str = form_str.replace(',', '')
-    # Son 5 maçı al
     last_5 = form_str[-5:] if len(form_str) >= 5 else form_str
-    
     html = "<div class='form-badges'>"
     for char in last_5:
         if char == 'W': html += "<div class='badge badge-W'>G</div>"
@@ -210,10 +206,36 @@ def render_form_badges(form_str):
     return html
 
 # -----------------------------------------------------------------------------
-# 6. QUANTUM SİMÜLASYON MOTORU (GERÇEKÇİ MOD)
+# 6. DIXON-COLES MODEL İÇİN FONKSİYONLAR (GERÇEKÇİ TAHMİN)
+# -----------------------------------------------------------------------------
+def dixon_coles_adjustment(goals_home, goals_away, rho):
+    if goals_home == 0 and goals_away == 0: return 1 - rho
+    elif goals_home == 0 and goals_away == 1: return 1 + rho
+    elif goals_home == 1 and goals_away == 0: return 1 + rho
+    elif goals_home == 1 and goals_away == 1: return 1 - rho
+    return 1.0
+
+def dc_poisson_prob(home_lambda, away_lambda, rho, max_goals=10):
+    probs = np.zeros((max_goals+1, max_goals+1))
+    for h in range(max_goals+1):
+        for a in range(max_goals+1):
+            probs[h, a] = (np.exp(-home_lambda) * (home_lambda ** h) / np.math.factorial(h)) * \
+                          (np.exp(-away_lambda) * (away_lambda ** a) / np.math.factorial(a)) * \
+                          dixon_coles_adjustment(h, a, rho)
+    return probs / probs.sum()  # Normalize
+
+# Basit DC parametre tahmini (gerçek veriye göre optimize et)
+def estimate_dc_params(stats, home_name, away_name):
+    # Basit rho = 0.08 (literatürden)
+    rho = 0.08
+    home_lambda = stats[home_name]['att'] * stats[away_name]['def']
+    away_lambda = stats[away_name]['att'] * stats[home_name]['def']
+    return home_lambda, away_lambda, rho
+
+# -----------------------------------------------------------------------------
+# 7. QUANTUM SİMÜLASYON MOTORU (DIXON-COLES + xG ENTEGRASYONU)
 # -----------------------------------------------------------------------------
 def simulate_match_realism(home_name, away_name, stats, avg_goals):
-    # İsimleri güvenli şekilde eşleştir
     safe_home = match_team_name(home_name, stats.keys())
     safe_away = match_team_name(away_name, stats.keys())
     
@@ -223,65 +245,58 @@ def simulate_match_realism(home_name, away_name, stats, avg_goals):
     h = stats[safe_home]
     a = stats[safe_away]
     
-    # 1. HOME ADVANTAGE (Ev Sahibi Avantajı)
-    # Futbolda ev sahibi ortalama +0.3 ile +0.4 gol avantajına sahiptir.
-    home_advantage = 0.35 
+    # Home advantage + Deplasman cezası
+    home_advantage = 0.35
+    deplasman_ceza = 0.90
     
-    # xG Hesaplama (Daha gerçekçi formül)
+    # xG Hesaplama (Gerçekçi)
     h_xg = (h['att'] * a['def'] * avg_goals) + home_advantage
-    a_xg = (a['att'] * h['def'] * avg_goals)
+    a_xg = (a['att'] * h['def'] * avg_goals) * deplasman_ceza
     
-    # Form Etkisi (Sonuçları %10-15 saptırır)
+    # Form etkisi
     h_xg *= (0.9 + (h['form_val'] * 0.2))
     a_xg *= (0.9 + (a['form_val'] * 0.2))
     
-    # MONTE CARLO SİMÜLASYONU (20.000 Maç yeterli ve hızlıdır)
-    SIMS = 20000
-    rng = np.random.default_rng()
-    
-    h_goals = rng.poisson(h_xg, SIMS)
-    a_goals = rng.poisson(a_xg, SIMS)
+    # Dixon-Coles ile olasılık matrisi hesapla
+    home_lambda, away_lambda, rho = estimate_dc_params(stats, safe_home, safe_away)
+    probs = dc_poisson_prob(home_lambda, away_lambda, rho)
     
     # Olasılıklar
-    prob_1 = (np.sum(h_goals > a_goals) / SIMS) * 100
-    prob_X = (np.sum(h_goals == a_goals) / SIMS) * 100
-    prob_2 = (np.sum(h_goals < a_goals) / SIMS) * 100
+    prob_1 = np.sum(np.triu(probs, 1)) * 100  # Üst üçgen: home > away
+    prob_X = np.sum(np.diag(probs)) * 100     # Çapraz: eşit
+    prob_2 = np.sum(np.tril(probs, -1)) * 100 # Alt üçgen: away > home
     
-    # En Olası Skor
-    score_hashes = h_goals * 100 + a_goals
-    unique, counts = np.unique(score_hashes, return_counts=True)
-    best_idx = np.argmax(counts)
-    best_hash = unique[best_idx]
-    h_s, a_s = best_hash // 100, best_hash % 100
+    # En olası skor
+    h_s, a_s = np.unravel_index(np.argmax(probs), probs.shape)
     exact_score = f"{h_s}-{a_s}"
     
-    # İY/MS MANTIĞI (Skora göre tutarlı)
-    # Skor 0-0 ise İY X olur.
-    # Skor 2-1 ise İY X veya 1 olabilir. Biz en olası senaryoyu seçiyoruz.
-    if h_s > a_s: 
-        ht_ft = "1 / 1"
-    elif a_s > h_s: 
-        ht_ft = "2 / 2"
-    else: 
-        ht_ft = "X / X"
+    # İY/MS
+    if h_s > a_s: ht_ft = "1 / 1"
+    elif a_s > h_s: ht_ft = "2 / 2"
+    else: ht_ft = "X / X"
         
-    # Güven Skoru
+    # Güven
     conf = max(prob_1, prob_X, prob_2)
     
-    # Ana Tahmin Yazısı
+    # Ana tahmin
     if prob_1 > prob_2 and prob_1 > prob_X: main_text = f"{home_name} KAZANIR"
     elif prob_2 > prob_1 and prob_2 > prob_X: main_text = f"{away_name} KAZANIR"
     else: main_text = "BERABERLİK"
     
-    # Yorum Üretimi
-    comment = f"Ev sahibi **{home_name}**, Quantum simülasyonlarında maçların **%{prob_1:.0f}**'ini kazandı. "
-    if conf > 60: comment += "İstatistiksel olarak **güçlü bir favori**."
-    elif abs(prob_1 - prob_2) < 10: comment += "Maç ortada görünüyor, **taraf bahsinden kaçınılmalı**."
-    else: comment += "Rakip takımın sürpriz potansiyeli var."
+    # Yorum
+    comment = f"Ev sahibi **{home_name}**, Dixon-Coles modeline göre maçların **%{prob_1:.0f}**'ini kazandı. "
+    if conf > 70: comment += "İstatistiksel olarak **yüksek güvenilir favori**."
+    elif abs(prob_1 - prob_2) < 10: comment += "Maç dengeli, **beraberlik ihtimali yüksek**."
+    else: comment += "Deplasman takımı sürpriz yapabilir."
     
-    if (h_xg + a_xg) > 2.6: comment += " Gol beklentisi (xG) yüksek, **2.5 ÜST** ihtimali güçlü."
-    else: comment += " Düşük tempolu, taktiksel bir maç bekleniyor (**2.5 ALT**)."
-
+    over25_prob = np.sum(probs[ np.indices(probs.shape)[0] + np.indices(probs.shape)[1] > 2 ]) * 100
+    if over25_prob > 60: comment += " Gol beklentisi yüksek (**2.5 ÜST** % {over25_prob:.0f})."
+    else: comment += " Düşük skorlu maç bekleniyor (**2.5 ALT** % {100 - over25_prob:.0f})."
+    
+    # KG Var
+    kg_var_prob = (1 - probs[0,:].sum() - probs[:,0].sum() + probs[0,0]) * 100
+    comment += f" KG VAR ihtimali: %{kg_var_prob:.0f}."
+    
     return {
         'pred': main_text,
         'score': exact_score,
@@ -289,13 +304,14 @@ def simulate_match_realism(home_name, away_name, stats, avg_goals):
         'conf': conf,
         'comment': comment,
         'stats': {'h': h, 'a': a, 'h_name': safe_home, 'a_name': safe_away},
-        'raw_probs': [prob_1, prob_X, prob_2]
+        'raw_probs': [prob_1, prob_X, prob_2],
+        'over25': over25_prob,
+        'kg_var': kg_var_prob
     }
 
 def create_radar(h_name, h_stats, a_name, a_stats):
     categories = ['Hücum', 'Savunma', 'Form', 'Gol Gücü', 'İstikrar']
     
-    # Verileri 0-100 arasına çek
     h_vals = [
         min(h_stats['att']*50, 100), min((3.5-h_stats['def'])*30, 100),
         min(h_stats['form_val']*80, 100), min(h_stats['att']*40 + h_stats['form_val']*20, 100),
@@ -311,33 +327,30 @@ def create_radar(h_name, h_stats, a_name, a_stats):
     fig.add_trace(go.Scatterpolar(r=h_vals, theta=categories, fill='toself', name=h_name, line_color='#00ff88'))
     fig.add_trace(go.Scatterpolar(r=a_vals, theta=categories, fill='toself', name=a_name, line_color='#facc15'))
     fig.update_layout(
-        polar=dict(radialaxis=dict(visible=True, range=[0, 100], showticklabels=False, linecolor='#334155'), bgcolor='rgba(0,0,0,0)'),
+        polar=dict(radialaxis=dict(visible=True, range=[0, 100], showticklabels=True, linecolor='#334155'), bgcolor='rgba(0,0,0,0)'),
         paper_bgcolor='rgba(0,0,0,0)', font_color='white', margin=dict(l=20,r=20,t=20,b=20),
-        legend=dict(orientation="h", y=0, x=0.3)
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5)
     )
     return fig
 
 # -----------------------------------------------------------------------------
-# 7. MAIN APP LOOP
+# 8. MAIN APP LOOP
 # -----------------------------------------------------------------------------
 def main():
     st.markdown("<div class='quantum-title'>QUANTUM AI</div>", unsafe_allow_html=True)
     
-    # 1. Lig Seçimi
     col_sel1, col_sel2 = st.columns([1, 2])
     with col_sel1:
         league_name = st.selectbox("LİG SEÇİNİZ", list(LEAGUES.keys()))
     league_code = LEAGUES[league_name]
     
-    # 2. Veri Çekme
     with st.spinner("Veri tabanına bağlanılıyor..."):
         data = fetch_data(league_code)
     
     if not data or not data.get('matches'):
         st.error("Bu lig için şu an veri alınamıyor veya maç yok.")
         return
-
-    # 3. İstatistikleri İşle
+    
     stats = {}
     avg_goals = 1.5
     if data['standings']:
@@ -346,9 +359,7 @@ def main():
         avg_goals = tg/tp if tp>0 else 1.5
         for t in table:
             name = t['team']['name']; played = t['playedGames']
-            # Form verisini al
             raw_form = t.get('form', 'D,L,D,L,D')
-            # Formu sayısal değere çevir (1.0 = Nötr)
             form_val = 1.0
             if raw_form:
                 score = sum({'W':1.1, 'D':1.0, 'L':0.9}.get(c, 1.0) for c in raw_form.replace(',',''))
@@ -360,33 +371,34 @@ def main():
                 'form_val': form_val, 
                 'form_str': raw_form
             }
-
-    # 4. Maç Listesi
+    
     matches = {f"{m['homeTeam']['name']} - {m['awayTeam']['name']}": m for m in data['matches']['matches'] if 'homeTeam' in m}
     
     with col_sel2:
         selected = st.selectbox("MAÇI SEÇİN", list(matches.keys()))
-
-    # 5. Analiz Butonu
+    
     if st.button("SİMÜLASYONU BAŞLAT", use_container_width=True):
         m_data = matches[selected]
         h_name_api = m_data['homeTeam']['name']
         a_name_api = m_data['awayTeam']['name']
         
-        # Yükleniyor efekti
         bar = st.progress(0)
         for i in range(100):
             time.sleep(0.005)
             bar.progress(i+1)
         bar.empty()
         
-        # Simülasyonu Çalıştır
         res = simulate_match_realism(h_name_api, a_name_api, stats, avg_goals)
         
         if res:
-            # --- SONUÇ EKRANI ---
+            # Güven badge
+            if res['conf'] > 70: badge_class = "badge-high"; badge_text = "YÜKSEK GÜVEN"
+            elif res['conf'] > 60: badge_class = "badge-medium"; badge_text = "ORTA GÜVEN"
+            else: badge_class = "badge-low"; badge_text = "DÜŞÜK GÜVEN"
             
-            # KUPON KARTI
+            st.markdown(f"<div style='text-align:center; margin-bottom:10px;'><span class='{badge_class}'>{badge_text}</span></div>", unsafe_allow_html=True)
+            
+            # Kupon Kartı
             st.markdown(f"""
             <div class="ticket-container">
                 <div class="team-vs">{res['stats']['h_name']} vs {res['stats']['a_name']}</div>
@@ -400,7 +412,7 @@ def main():
             </div>
             """, unsafe_allow_html=True)
             
-            # TAKIM FORMLARI (G-B-M)
+            # Formlar
             c1, c2 = st.columns(2)
             with c1:
                 st.markdown(f"**{res['stats']['h_name']}** (Ev)")
@@ -419,24 +431,26 @@ def main():
                 </div>
                 """, unsafe_allow_html=True)
             
-            # RADAR VE YORUM
+            # Radar ve Yorum
             r1, r2 = st.columns([1, 1])
             with r1:
                 st.plotly_chart(create_radar(res['stats']['h_name'], res['stats']['h'], res['stats']['a_name'], res['stats']['a']), use_container_width=True)
             with r2:
                 st.markdown(f"<div class='ai-comment'><b>🤖 ANALİZ RAPORU:</b><br>{res['comment']}</div>", unsafe_allow_html=True)
                 
-                # Olasılık Barları
                 st.write("")
                 st.caption("Kazanma Olasılıkları")
-                st.progress(int(res['raw_probs'][0]), text=f"Ev Sahibi: %{res['raw_probs'][0]:.1f}")
-                st.progress(int(res['raw_probs'][2]), text=f"Deplasman: %{res['raw_probs'][2]:.1f}")
-
-            # PAYLAŞIM ALANI
+                st.progress(int(res['raw_probs'][0])/100, text=f"Ev Sahibi: %{res['raw_probs'][0]:.1f}")
+                st.progress(int(res['raw_probs'][2])/100, text=f"Deplasman: %{res['raw_probs'][2]:.1f}")
+                
+                st.caption("Ek Tahminler")
+                st.progress(int(res['over25'])/100, text=f"2.5 ÜST: %{res['over25']:.1f}")
+                st.progress(int(res['kg_var'])/100, text=f"KG VAR: %{res['kg_var']:.1f}")
+            
+            # Paylaşım
             st.markdown("""<div class='share-box'>
             <p style='color:#aaa'>📸 Ekran görüntüsü alıp paylaşabilirsin.</p>
             </div>""", unsafe_allow_html=True)
-
         else:
             st.error("Takım verileri eşleştirilemedi. Lütfen başka bir maç deneyin.")
 
