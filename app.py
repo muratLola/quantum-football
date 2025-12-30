@@ -45,8 +45,8 @@ TRANSLATIONS = {
         "top_scores": "En Olası Skorlar",
         "ht_ft": "İY/MS (HT/FT) Dağılımı",
         "total_goal": "Toplam Gol Beklentisi",
-        "no_match": "Bu ligde yakında maç bulunamadı.",
-        "footer": "Quantum Football v52.0 © 2026 | Model: Monte Carlo & Poisson Dağılımı | Uyarı: Bu yazılım sadece istatistiksel ve bilimsel analiz amaçlıdır. Yatırım tavsiyesi değildir."
+        "no_match": "Bu ligde/turnuvada yakında planlanmış maç bulunamadı.",
+        "footer": "Quantum Football v53.0 © 2026 | Model: Monte Carlo & Poisson Dağılımı | Uyarı: Bu yazılım sadece istatistiksel ve bilimsel analiz amaçlıdır. Yatırım tavsiyesi değildir."
     },
     "en": {
         "app_title": "QUANTUM FOOTBALL",
@@ -70,13 +70,13 @@ TRANSLATIONS = {
         "top_scores": "Most Likely Scores",
         "ht_ft": "HT/FT Distribution",
         "total_goal": "Total Goal Expectancy",
-        "no_match": "No upcoming matches found in this league.",
-        "footer": "Quantum Football v52.0 © 2026 | Model: Monte Carlo & Poisson Distribution | Disclaimer: This tool is for statistical analysis only. Not financial advice."
+        "no_match": "No upcoming matches found in this league/tournament.",
+        "footer": "Quantum Football v53.0 © 2026 | Model: Monte Carlo & Poisson Distribution | Disclaimer: This tool is for statistical analysis only. Not financial advice."
     }
 }
 
 # -----------------------------------------------------------------------------
-# 3. CSS STİLİ (DÜZELTİLDİ: xG Gösterimi)
+# 3. CSS STİLİ
 # -----------------------------------------------------------------------------
 st.markdown("""
     <style>
@@ -95,7 +95,7 @@ st.markdown("""
         white-space: nowrap;
         overflow: visible;
         text-overflow: clip;
-        font-size: 2.5rem !important; /* Boyutu sabitle */
+        font-size: 2.5rem !important; 
     }
     
     .stat-card {
@@ -115,51 +115,47 @@ st.markdown("""
         border-bottom: 1px solid #334155; font-family: 'Roboto Mono';
     }
     
-    /* Footer Stili */
     .footer {
         margin-top: 50px; padding-top: 20px; border-top: 1px solid #334155;
         text-align: center; color: #64748b; font-size: 0.8rem;
     }
     
-    /* Küçük X Butonu Stili */
     div[data-testid="stButton"] button { border-radius: 8px; }
     </style>
     """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 4. DATA MANAGER (DÜZELTİLDİ: GARANTİ LOGOLAR)
+# 4. DATA MANAGER
 # -----------------------------------------------------------------------------
 if 'sim_results' not in st.session_state: st.session_state.sim_results = None
 if 'match_info' not in st.session_state: st.session_state.match_info = None
 
-# TÜM TAKIM LOGOLARI LİSTESİ (Wikimedia Garantili Linkler)
+# TÜM TAKIM LOGOLARI LİSTESİ (Yedek Linkler)
 TEAM_LOGOS = {
     # 4 BÜYÜKLER
-    2054: "https://upload.wikimedia.org/wikipedia/commons/f/f6/Galatasaray_Sports_Club_Logo.png", # Galatasaray
-    2052: "https://upload.wikimedia.org/wikipedia/tr/8/86/Fenerbah%C3%A7e_SK.png", # Fenerbahçe
-    2036: "https://upload.wikimedia.org/wikipedia/commons/2/20/Besiktas_jk.png", # Beşiktaş
-    2061: "https://upload.wikimedia.org/wikipedia/tr/a/ab/Trabzonspor_Amblemi.png", # Trabzonspor
+    2054: "https://upload.wikimedia.org/wikipedia/commons/f/f6/Galatasaray_Sports_Club_Logo.png",
+    2052: "https://upload.wikimedia.org/wikipedia/tr/8/86/Fenerbah%C3%A7e_SK.png",
+    2036: "https://upload.wikimedia.org/wikipedia/commons/2/20/Besiktas_jk.png",
+    2061: "https://upload.wikimedia.org/wikipedia/tr/a/ab/Trabzonspor_Amblemi.png",
     
-    # DİĞERLERİ
-    2058: "https://upload.wikimedia.org/wikipedia/tr/e/e0/Samsunspor_logo_2.png", # Samsunspor
-    4503: "https://upload.wikimedia.org/wikipedia/tr/d/d3/%C4%B0stanbul_Ba%C5%9Fak%C5%9Fehir_FK.png", # Başakşehir
-    2044: "https://upload.wikimedia.org/wikipedia/tr/6/6c/Kasimpasa_logo.png", # Kasımpaşa
-    2037: "https://upload.wikimedia.org/wikipedia/tr/5/52/Antalyaspor_logo.png", # Antalyaspor
-    2053: "https://upload.wikimedia.org/wikipedia/tr/9/9f/Sivasspor.png", # Sivasspor
-    2049: "https://upload.wikimedia.org/wikipedia/commons/1/1b/Konyaspor_Logo.png", # Konyaspor
-    2043: "https://upload.wikimedia.org/wikipedia/tr/0/00/Kayserispor_logosu.png", # Kayserispor
-    5553: "https://upload.wikimedia.org/wikipedia/tr/5/5f/Alanyaspor_logo.png", # Alanyaspor
-    2051: "https://upload.wikimedia.org/wikipedia/tr/e/ee/Gaziantep_FK.png", # Gaziantep FK
-    5642: "https://upload.wikimedia.org/wikipedia/tr/9/9a/Hatayspor_logo.png", # Hatayspor
-    2055: "https://upload.wikimedia.org/wikipedia/tr/2/2e/%C3%87aykur_Rizespor_logo.png", # Çaykur Rizespor
-    859: "https://upload.wikimedia.org/wikipedia/tr/2/26/Adana_Demirspor_logo.png", # Adana Demirspor
-    
-    # DÜŞME HATTI VE YENİLER
-    5532: "https://upload.wikimedia.org/wikipedia/tr/7/74/Fatih_Karag%C3%BCmr%C3%BCk_SK_logo.png", # Karagümrük
-    5529: "https://upload.wikimedia.org/wikipedia/tr/2/23/MKE_Ankarag%C3%BCc%C3%BC_logo.png", # Ankaragücü
-    5523: "https://upload.wikimedia.org/wikipedia/tr/7/7d/Pendikspor_logo.png", # Pendikspor
-    5531: "https://upload.wikimedia.org/wikipedia/tr/7/77/G%C3%B6ztepe_logo.png", # Göztepe (Olası)
-    2032: "https://upload.wikimedia.org/wikipedia/tr/9/9a/Ey%C3%BCpspor_logo.png" # Eyüpspor (Olası)
+    # ANADOLU VE DİĞERLERİ
+    2058: "https://upload.wikimedia.org/wikipedia/tr/e/e0/Samsunspor_logo_2.png",
+    4503: "https://upload.wikimedia.org/wikipedia/tr/d/d3/%C4%B0stanbul_Ba%C5%9Fak%C5%9Fehir_FK.png",
+    2044: "https://upload.wikimedia.org/wikipedia/tr/6/6c/Kasimpasa_logo.png",
+    2037: "https://upload.wikimedia.org/wikipedia/tr/5/52/Antalyaspor_logo.png",
+    2053: "https://upload.wikimedia.org/wikipedia/tr/9/9f/Sivasspor.png",
+    2049: "https://upload.wikimedia.org/wikipedia/commons/1/1b/Konyaspor_Logo.png",
+    2043: "https://upload.wikimedia.org/wikipedia/tr/0/00/Kayserispor_logosu.png",
+    5553: "https://upload.wikimedia.org/wikipedia/tr/5/5f/Alanyaspor_logo.png",
+    2051: "https://upload.wikimedia.org/wikipedia/tr/e/ee/Gaziantep_FK.png",
+    5642: "https://upload.wikimedia.org/wikipedia/tr/9/9a/Hatayspor_logo.png",
+    2055: "https://upload.wikimedia.org/wikipedia/tr/2/2e/%C3%87aykur_Rizespor_logo.png",
+    859: "https://upload.wikimedia.org/wikipedia/tr/2/26/Adana_Demirspor_logo.png",
+    5532: "https://upload.wikimedia.org/wikipedia/tr/7/74/Fatih_Karag%C3%BCmr%C3%BCk_SK_logo.png",
+    5529: "https://upload.wikimedia.org/wikipedia/tr/2/23/MKE_Ankarag%C3%BCc%C3%BC_logo.png",
+    5523: "https://upload.wikimedia.org/wikipedia/tr/7/7d/Pendikspor_logo.png",
+    5531: "https://upload.wikimedia.org/wikipedia/tr/7/77/G%C3%B6ztepe_logo.png",
+    2032: "https://upload.wikimedia.org/wikipedia/tr/9/9a/Ey%C3%BCpspor_logo.png"
 }
 
 class DataManager:
@@ -172,12 +168,15 @@ class DataManager:
         matches_data = {"matches": []}
         
         try:
+            # Standings her turnuvada olmayabilir (örn. kupa) o yüzden try-except
             r1 = requests.get(f"{CONFIG['API_URL']}/competitions/{league_code}/standings", headers=_self.headers)
             if r1.status_code == 200:
                 standings_data = r1.json()
             
             today = datetime.now().strftime("%Y-%m-%d")
             future = (datetime.now() + timedelta(days=90)).strftime("%Y-%m-%d")
+            
+            # Fikstür Çekme
             r2 = requests.get(f"{CONFIG['API_URL']}/competitions/{league_code}/matches", 
                               headers=_self.headers, params={"dateFrom": today, "dateTo": future})
             if r2.status_code == 200:
@@ -209,7 +208,11 @@ class DataManager:
                 matches_data['matches'] = []
             matches_data['matches'].extend(manual_matches)
         
-        if not standings_data["standings"][0]["table"] and not matches_data["matches"]:
+        # Boş veri kontrolü
+        t_check = standings_data.get("standings", [])
+        m_check = matches_data.get("matches", [])
+        
+        if not t_check and not m_check:
             return None, None
             
         return standings_data, matches_data
@@ -361,15 +364,22 @@ def main():
     st.markdown(f"<div class='main-title'>{t['app_title']}</div>", unsafe_allow_html=True)
 
     dm = DataManager(api_key)
-    # LIG LİSTESİ (FRANSA VE HOLLANDA EKLENDİ)
+    
+    # --- YENİ LİG LİSTESİ (GÜNCELLENDİ) ---
     L_MAP = {
-        "Premier League": "PL", 
-        "Süper Lig & Kupa": "TR1", 
-        "La Liga": "PD", 
-        "Bundesliga": "BL1", 
-        "Serie A": "SA",
+        "Süper Lig & Kupa (Türkiye)": "TR1",
+        "Premier League (İngiltere)": "PL", 
+        "Championship (İngiltere Alt)": "ELC", 
+        "La Liga (İspanya)": "PD", 
+        "Bundesliga (Almanya)": "BL1", 
+        "Serie A (İtalya)": "SA",
         "Ligue 1 (Fransa)": "FL1", 
-        "Eredivisie (Hollanda)": "DED"
+        "Eredivisie (Hollanda)": "DED",
+        "Primeira Liga (Portekiz)": "PPL",
+        "Série A (Brezilya)": "BSA",
+        "UEFA Şampiyonlar Ligi": "CL",
+        "FIFA Dünya Kupası": "WC",
+        "Avrupa Şampiyonası": "EC"
     }
     
     c1, c2 = st.columns([1, 2])
@@ -377,13 +387,17 @@ def main():
     
     standings, fixtures = dm.fetch_data(L_MAP[league])
     
-    if not standings or not standings.get("standings"): 
-        if not fixtures or not fixtures.get("matches"):
-            st.info(t['no_match'])
-            st.stop()
-
-    table = standings.get("standings", [{"table": []}])[0].get("table", [])
+    if not standings and not fixtures:
+        st.info(t['no_match'])
+        st.stop()
     
+    # Puan Durumu İşleme (Varsa)
+    table = []
+    if standings and "standings" in standings:
+        standings_list = standings.get("standings", [])
+        if standings_list:
+            table = standings_list[0].get("table", [])
+
     teams = {}
     if table:
         total_goals = sum(t["goalsFor"] for t in table)
@@ -391,7 +405,6 @@ def main():
         avg_league = total_goals / total_games if total_games > 0 else 2.5
         
         for row in table:
-            # LOGO KONTROLÜ: API'den gelmezse manuel listeden al
             t_id = row["team"]["id"]
             crest = row["team"].get("crest") or TEAM_LOGOS.get(t_id, CONFIG["DEFAULT_LOGO"])
             
@@ -400,10 +413,15 @@ def main():
                 "gf": row["goalsFor"]/row["playedGames"], "ga": row["goalsAgainst"]/row["playedGames"]
             }
     else:
-        avg_league = 2.5
+        avg_league = 2.5 # Turnuvalar için varsayılan ortalama
 
-    matches = {f"{m['homeTeam']['name']} vs {m['awayTeam']['name']} ({m['utcDate'][:10]})": m 
-               for m in fixtures.get("matches", []) if m["status"] in ["SCHEDULED", "TIMED"]}
+    # Maçları Listele
+    matches = {}
+    if fixtures and "matches" in fixtures:
+        for m in fixtures.get("matches", []):
+            if m["status"] in ["SCHEDULED", "TIMED"]:
+                match_label = f"{m['homeTeam']['name']} vs {m['awayTeam']['name']} ({m['utcDate'][:10]})"
+                matches[match_label] = m
     
     if not matches: st.info(t['no_match']); st.stop()
 
@@ -413,14 +431,14 @@ def main():
         m = matches[sel_match]
         h_id, a_id = m["homeTeam"]["id"], m["awayTeam"]["id"]
         
-        # LOGO ZORLAMASI: Maçtan geleni kullan, yoksa takımdan, yoksa listeden (Garanti Wikimedia)
+        # LOGO ZORLAMASI (Maç objesinden almaya öncelik veriyoruz)
         h_crest = m["homeTeam"].get("crest") or teams.get(h_id, {}).get("crest") or TEAM_LOGOS.get(h_id, CONFIG["DEFAULT_LOGO"])
         a_crest = m["awayTeam"].get("crest") or teams.get(a_id, {}).get("crest") or TEAM_LOGOS.get(a_id, CONFIG["DEFAULT_LOGO"])
 
         h_team = teams.get(h_id, {"name": m["homeTeam"]["name"], "crest": h_crest, "gf": 1.5, "ga": 1.2})
         a_team = teams.get(a_id, {"name": m["awayTeam"]["name"], "crest": a_crest, "gf": 1.4, "ga": 1.3})
         
-        # GÜÇ ENJEKSİYONU (Yıldız Oyuncu Etkili)
+        # GÜÇ ENJEKSİYONU (Manuel Statlar - Sadece TR için örnek)
         MANUAL_STATS = {
             2054: {"gf": 2.50, "ga": 0.80}, # Galatasaray
             2052: {"gf": 2.55, "ga": 0.85}, # Fenerbahçe
@@ -435,9 +453,16 @@ def main():
         eng = SimulationEngine()
         with st.spinner(t['calculating']):
             current_params = params.copy()
-            if "Süper Kupa" in m.get("competition", {}).get("name", ""):
-                current_params["home_adv"] = 1.0 
+            # Tarafsız saha kontrolü (Kupa finalleri vb.)
+            comp_name = m.get("competition", {}).get("name", "")
+            if "Kupa" in comp_name or "Cup" in comp_name or "Champions" in comp_name:
+                # Şampiyonlar ligi finali vb değilse ev sahibi avantajını azalt ama sıfırlama
+                # (Gruplarda ev sahibi var, ama finalde yok. Basitlik için düşürüyoruz)
+                current_params["home_adv"] = 1.08 
             
+            if "Süper Kupa" in comp_name:
+                 current_params["home_adv"] = 1.0
+
             raw_data = eng.run_monte_carlo(h_team, a_team, avg_league, current_params)
             res = eng.analyze_results(raw_data)
             
@@ -454,7 +479,6 @@ def main():
         with c_h: st.markdown(f"<div style='text-align:center'><img src='{info['h']['crest']}' width='80'><br><h3>{info['h']['name']}</h3></div>", unsafe_allow_html=True)
         with c_vs: 
             st.markdown("<h1 style='text-align:center; color:#94a3b8'>VS</h1>", unsafe_allow_html=True)
-            # xG Değerleri (CSS ile düzeltildi)
             st.metric(t['xg'], f"{res['xg'][0]:.2f} - {res['xg'][1]:.2f}")
         with c_a: st.markdown(f"<div style='text-align:center'><img src='{info['a']['crest']}' width='80'><br><h3>{info['a']['name']}</h3></div>", unsafe_allow_html=True)
 
