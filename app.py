@@ -7,6 +7,7 @@ import plotly.express as px
 from datetime import datetime, timedelta
 from dataclasses import dataclass
 from typing import Dict, List, Tuple
+import os  # <--- EKLENEN KRİTİK SATIR BU
 
 # -----------------------------------------------------------------------------
 # 1. ANALYTIC CONFIGURATION (SAF ANALİZ)
@@ -176,6 +177,7 @@ class AnalyticEngine:
 # 5. DASHBOARD UI
 # -----------------------------------------------------------------------------
 def main():
+    # HATA BURADAYDI: os modülü yukarıda import edildi, artık çalışır.
     api_key = os.environ.get("FOOTBALL_API_KEY") or st.secrets.get("FOOTBALL_API_KEY")
     
     with st.sidebar:
