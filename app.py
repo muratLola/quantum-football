@@ -257,50 +257,61 @@ class LiveExecutionEngine:
         }
 
 # -----------------------------------------------------------------------------
-# 6. APP MAIN LOGIC
+# 6. APP MAIN LOGIC (DÜZELTİLMİŞ UI SIRALAMASI)
 # -----------------------------------------------------------------------------
 def main():
+    # --- 1. ADIM: DİL SEÇİMİ (EN ÜSTTE VE SABİT) ---
+    # Bu kısım her şeyden önce çalışır, böylece arayüz asla bozulmaz.
+    with st.sidebar:
+        # Diller
+        LANGUAGES = {
+            "tr": "🇹🇷 Türkçe",
+            "en": "🇬🇧 English",
+            "de": "🇩🇪 Deutsch",
+            "ar": "🇸🇦 العربية"
+        }
+        # Dil Seçim Kutusu
+        sel_lang = st.selectbox("Language / Dil", list(LANGUAGES.keys()), format_func=lambda x: LANGUAGES[x])
+        
+        # Basit Çeviri Sözlüğü (Hemen burada tanımladık ki karışmasın)
+        T = {
+            "tr": {"title": "KASA YÖNETİMİ", "key_ph": "API Anahtarı Giriniz", "cap": "Toplam Kasa", "risk": "Risk", "exit": "ÇIKIŞ YAP", "scan": "ANALİZİ BAŞLAT", "live": "CANLI MONİTÖRÜ AÇ", "market": "Pazar", "fixture": "Maç Seçimi", "odds": "Oranlar"},
+            "en": {"title": "BANKROLL MGT", "key_ph": "Enter API Key", "cap": "Total Capital", "risk": "Risk", "exit": "EXIT MODE", "scan": "SCAN FOR VALUE", "live": "ACTIVATE LIVE MONITOR", "market": "Market", "fixture": "Fixture", "odds": "Odds"},
+            "de": {"title": "KAPITALMANAGEMENT", "key_ph": "API-Schlüssel eingeben", "cap": "Gesamtkapital", "risk": "Risiko", "exit": "BEENDEN", "scan": "NACH WERT SUCHEN", "live": "LIVE-MONITOR AKTIVIEREN", "market": "Markt", "fixture": "Spielauswahl", "odds": "Quoten"},
+            "ar": {"title": "إدارة رأس المال", "key_ph": "أدخل مفتاح API", "cap": "إجمالي رأس المال", "risk": "مخاطرة", "exit": "خروج", "scan": "بحث عن قيمة", "live": "تفعيل المراقبة الحية", "market": "سوق", "fixture": "تحديد المباراة", "odds": "الاحتمالات"}
+        }
+        t = T.get(sel_lang, T["en"]) # Seçilen dilin kelimeleri
+
+        # RTL (Arapça) Desteği
+        if sel_lang == "ar":
+            st.markdown("<style>.stApp {direction: rtl; text-align: right;}</style>", unsafe_allow_html=True)
+
+        st.divider() # Görsel ayırıcı çizgi
+
+    # --- 2. ADIM: API VE GÜVENLİK ---
     api_key = os.environ.get("FOOTBALL_API_KEY") or st.secrets.get("FOOTBALL_API_KEY")
     
     with st.sidebar:
-        st.header("🎯 Sniper Hub")
+        st.header(f"🏦 {t['title']}")
         if not api_key:
-            api_key = st.text_input("API Key", type="password")
-            if not api_key: st.stop()
+            api_key = st.text_input(t['key_ph'], type="password")
+            if not api_key: st.stop() # Key yoksa durur ama dil seçimi hala görünür!
             
         b_roll = st.session_state.portfolio["bankroll"]
         exp = st.session_state.portfolio["exposure"]
-        st.metric("Total Capital", f"${b_roll:.2f}", delta=f"{st.session_state.portfolio['pnl']:+.2f}")
+        st.metric(t['cap'], f"${b_roll:.2f}", delta=f"{st.session_state.portfolio['pnl']:+.2f}")
+        st.metric("Exposure", f"${exp:.2f}", delta=f"{(exp/b_roll)*100:.1f}% {t['risk']}")
         
-        st.divider()
-        st.subheader("🛠️ Simulation Lab")
-        if st.button("Run Multi-League Sim"):
-            eng = QuantumEngine()
-            with st.spinner("Simulating PL, TR1, PD..."):
-                st.session_state.backtest_data = eng.run_multi_league_backtest()
-        
-        if st.session_state.backtest_data:
-            bd = st.session_state.backtest_data
-            c1, c2 = st.columns(2)
-            c1.metric("Sharpe Ratio", f"{bd['sharpe']:.2f}")
-            c2.metric("Max Drawdown", f"{bd['max_dd']*100:.1f}%")
-            
-            # League Breakdown
-            st.caption("Performance by League:")
-            for l, pnl in bd["league_pnl"].items():
-                st.write(f"{l}: ${pnl:.2f}")
-            
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(y=bd["history"], mode='lines', fill='tozeroy', line=dict(color='#3b82f6')))
-            fig.update_layout(height=150, margin=dict(l=0,r=0,t=0,b=0), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
-            st.plotly_chart(fig, use_container_width=True)
-
+        # --- 3. ADIM: ÇIKIŞ BUTONU (EN ALTTA) ---
+        # Bu butonu en alta aldık ki üsttekileri ezmesin.
         if st.session_state.mode == "LIVE":
-            if st.button("⬅️ Exit Sniper"):
+            st.divider()
+            if st.button(f"🚪 {t['exit']}", use_container_width=True):
                 st.session_state.mode = "PRE_MATCH"
                 st.rerun()
 
-    st.markdown("<div class='app-header'>QUANTUM ULTIMATE v48</div>", unsafe_allow_html=True)
+    # --- 4. ADIM: ANA EKRAN AKIŞI ---
+    st.markdown(f"<div class='app-header'>QUANTUM ULTIMATE v48</div>", unsafe_allow_html=True)
 
     # --- PRE-MATCH QUANT ---
     if st.session_state.mode == "PRE_MATCH":
@@ -308,7 +319,7 @@ def main():
         L_MAP = {"Premier League": "PL", "Süper Lig": "TR1", "La Liga": "PD", "Bundesliga": "BL1"}
         
         c1, c2 = st.columns([1,2])
-        with c1: l_sel = st.selectbox("Market", list(L_MAP.keys()))
+        with c1: l_sel = st.selectbox(t['market'], list(L_MAP.keys()))
         
         stnd, fixt = dm.fetch_league_data(L_MAP[l_sel])
         if not stnd: st.stop()
@@ -330,27 +341,26 @@ def main():
         matches = {f"{m['homeTeam']['name']} vs {m['awayTeam']['name']}": m 
                    for m in fixt["matches"] if m["status"] in ["SCHEDULED", "TIMED"]}
         
-        with c2: m_sel = st.selectbox("Fixture", list(matches.keys()))
+        with c2: m_sel = st.selectbox(t['fixture'], list(matches.keys()))
         
-        st.subheader("Market Odds Input")
+        st.subheader(t['odds'])
         oc1, oc2, oc3 = st.columns(3)
         odds = [
-            oc1.number_input("Home (1)", 1.01, 20.0, 2.00),
-            oc2.number_input("Draw (X)", 1.01, 20.0, 3.40),
-            oc3.number_input("Away (2)", 1.01, 20.0, 3.80)
+            oc1.number_input("1 (Home)", 1.01, 20.0, 2.00),
+            oc2.number_input("X (Draw)", 1.01, 20.0, 3.40),
+            oc3.number_input("2 (Away)", 1.01, 20.0, 3.80)
         ]
         
-        if st.button("SCAN FOR VALUE", use_container_width=True):
+        if st.button(t['scan'], use_container_width=True):
             m = matches[m_sel]
             engine = QuantumEngine()
             res = engine.analyze_pre_match(stats[m["homeTeam"]["id"]], stats[m["awayTeam"]["id"]], avg_g, odds, L_MAP[l_sel])
             
-            # FIX: Ensure 'match' name is stored for history logging
             st.session_state.pre_analysis = {
                 **res, 
                 "h_name": m["homeTeam"]["name"], 
                 "a_name": m["awayTeam"]["name"], 
-                "match_name": f"{m['homeTeam']['name']} vs {m['awayTeam']['name']}", # Fix for Live History
+                "match_name": f"{m['homeTeam']['name']} vs {m['awayTeam']['name']}",
                 "ids": (m["homeTeam"]["id"], m["awayTeam"]["id"])
             }
             
@@ -365,12 +375,12 @@ def main():
             else:
                 st.info("No value detected. Market is efficient.")
             
-            if st.button("🚀 ACTIVATE LIVE MONITOR"):
+            if st.button(f"🚀 {t['live']}"):
                 st.session_state.mode = "LIVE"
                 st.session_state.match_state = LiveState()
                 st.rerun()
 
-    # --- LIVE EXECUTION ---
+    # --- LIVE EXECUTION (AYNI KALDI) ---
     elif st.session_state.mode == "LIVE":
         pre = st.session_state.pre_analysis
         ms = st.session_state.match_state
@@ -426,7 +436,5 @@ def main():
                         st.success(f"FILLED @ {odds_val}")
                     
                     edge_txt = f"<span style='color:#4ade80'>Edge: +{live_edge*100:.1f}%</span>" if live_edge > 0.05 else "Fair Price"
-                    c_info.markdown(f"**{mkt}** @ {odds_val} | {edge_txt}", unsafe_allow_html=True)
+                    c_info.markdown(f"**{mkt}** @ {odds_val} | {edge_txt}", unsafe_allow_html=True))
 
-if __name__ == "__main__":
-    main()
