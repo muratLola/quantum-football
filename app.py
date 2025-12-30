@@ -46,7 +46,7 @@ TRANSLATIONS = {
         "ht_ft": "İY/MS (HT/FT) Dağılımı",
         "total_goal": "Toplam Gol Beklentisi",
         "no_match": "Bu ligde yakında maç bulunamadı.",
-        "footer": "Quantum Football v51.7 © 2026 | Model: Monte Carlo & Poisson Dağılımı | Uyarı: Bu yazılım sadece istatistiksel ve bilimsel analiz amaçlıdır. Yatırım tavsiyesi değildir."
+        "footer": "Quantum Football v51.9 © 2026 | Model: Monte Carlo & Poisson Dağılımı | Uyarı: Bu yazılım sadece istatistiksel ve bilimsel analiz amaçlıdır. Yatırım tavsiyesi değildir."
     },
     "en": {
         "app_title": "QUANTUM FOOTBALL",
@@ -71,12 +71,12 @@ TRANSLATIONS = {
         "ht_ft": "HT/FT Distribution",
         "total_goal": "Total Goal Expectancy",
         "no_match": "No upcoming matches found in this league.",
-        "footer": "Quantum Football v51.7 © 2026 | Model: Monte Carlo & Poisson Distribution | Disclaimer: This tool is for statistical analysis only. Not financial advice."
+        "footer": "Quantum Football v51.9 © 2026 | Model: Monte Carlo & Poisson Distribution | Disclaimer: This tool is for statistical analysis only. Not financial advice."
     }
 }
 
 # -----------------------------------------------------------------------------
-# 3. CSS STİLİ
+# 3. CSS STİLİ (DÜZELTİLDİ: xG Gösterimi)
 # -----------------------------------------------------------------------------
 st.markdown("""
     <style>
@@ -88,6 +88,14 @@ st.markdown("""
         text-align: center; margin-bottom: 10px;
         background: linear-gradient(90deg, #3b82f6, #10b981);
         -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    }
+    
+    /* xG Değerinin Sığması İçin Düzeltme */
+    div[data-testid="stMetricValue"] {
+        white-space: nowrap;
+        overflow: visible;
+        text-overflow: clip;
+        font-size: 2.5rem !important; /* Boyutu sabitle */
     }
     
     .stat-card {
@@ -119,10 +127,30 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 4. DATA MANAGER (GÜNCELLENMİŞ VE HATA TOLERANSLI)
+# 4. DATA MANAGER (DÜZELTİLDİ: Tüm Logolar)
 # -----------------------------------------------------------------------------
 if 'sim_results' not in st.session_state: st.session_state.sim_results = None
 if 'match_info' not in st.session_state: st.session_state.match_info = None
+
+# TÜM TAKIM LOGOLARI LİSTESİ (Genişletildi)
+TEAM_LOGOS = {
+    2054: "https://crests.football-data.org/2054.png", # Galatasaray
+    2052: "https://crests.football-data.org/2052.png", # Fenerbahçe
+    2061: "https://crests.football-data.org/2061.png", # Trabzonspor
+    2058: "https://crests.football-data.org/2058.png", # Samsunspor
+    2036: "https://crests.football-data.org/2036.png", # Beşiktaş
+    4503: "https://crests.football-data.org/4503.png", # Başakşehir
+    2044: "https://crests.football-data.org/2044.png", # Kasımpaşa
+    2037: "https://crests.football-data.org/2037.png", # Antalyaspor
+    2053: "https://crests.football-data.org/2053.png", # Sivasspor
+    2049: "https://crests.football-data.org/2049.png", # Konyaspor
+    2043: "https://crests.football-data.org/2043.png", # Kayserispor
+    5553: "https://crests.football-data.org/5553.png", # Alanyaspor
+    2051: "https://crests.football-data.org/2051.png", # Gaziantep FK
+    5642: "https://crests.football-data.org/5642.png", # Hatayspor
+    2055: "https://crests.football-data.org/2055.png", # Çaykur Rizespor
+    859: "https://crests.football-data.org/859.png", # Adana Demirspor
+}
 
 class DataManager:
     def __init__(self, api_key):
@@ -130,11 +158,9 @@ class DataManager:
 
     @st.cache_data(ttl=3600)
     def fetch_data(_self, league_code):
-        # Varsayılan boş veriler (API hatası durumunda çökmemesi için)
         standings_data = {"standings": [{"table": []}]}
         matches_data = {"matches": []}
         
-        # 1. API'den Veri Çekmeyi Dene
         try:
             r1 = requests.get(f"{CONFIG['API_URL']}/competitions/{league_code}/standings", headers=_self.headers)
             if r1.status_code == 200:
@@ -147,35 +173,32 @@ class DataManager:
             if r2.status_code == 200:
                 matches_data = r2.json()
         except:
-            # API hatası olursa sessizce devam et (Manuel maçlar eklenecek)
             pass
 
-        # 2. MANUEL SÜPER KUPA MAÇLARI (Sadece TR1 seçiliyse ekle)
+        # --- MANUEL SÜPER KUPA MAÇLARI ---
         if league_code == "TR1" or league_code == "SC": 
             manual_matches = [
                 {
                     "id": 99901,
-                    "homeTeam": {"name": "Galatasaray", "id": 2054},
-                    "awayTeam": {"name": "Trabzonspor", "id": 2061},
-                    "utcDate": "2026-01-05T17:30:00Z", # 5 Ocak 2026
+                    "homeTeam": {"name": "Galatasaray", "id": 2054, "crest": TEAM_LOGOS[2054]},
+                    "awayTeam": {"name": "Trabzonspor", "id": 2061, "crest": TEAM_LOGOS[2061]},
+                    "utcDate": "2026-01-05T17:30:00Z",
                     "status": "SCHEDULED",
                     "competition": {"name": "TFF Süper Kupa"}
                 },
                 {
                     "id": 99902,
-                    "homeTeam": {"name": "Fenerbahçe", "id": 2052},
-                    "awayTeam": {"name": "Samsunspor", "id": 2058},
-                    "utcDate": "2026-01-06T17:30:00Z", # 6 Ocak 2026
+                    "homeTeam": {"name": "Fenerbahçe", "id": 2052, "crest": TEAM_LOGOS[2052]},
+                    "awayTeam": {"name": "Samsunspor", "id": 2058, "crest": TEAM_LOGOS[2058]},
+                    "utcDate": "2026-01-06T17:30:00Z",
                     "status": "SCHEDULED",
                     "competition": {"name": "TFF Süper Kupa"}
                 }
             ]
-            # Eğer 'matches' listesi henüz yoksa oluştur
             if 'matches' not in matches_data:
                 matches_data['matches'] = []
             matches_data['matches'].extend(manual_matches)
         
-        # Eğer veri tamamen boşsa (API yok + Manuel yok) o zaman None dön
         if not standings_data["standings"][0]["table"] and not matches_data["matches"]:
             return None, None
             
@@ -189,7 +212,6 @@ class SimulationEngine:
         self.rng = np.random.default_rng()
 
     def run_monte_carlo(self, h_stats, a_stats, avg_g, params):
-        # Parametrik xG Hesaplama
         h_attack = (h_stats['gf'] / avg_g) * params['h_att_factor']
         h_def = (h_stats['ga'] / avg_g) * params['h_def_factor']
         a_attack = (a_stats['gf'] / avg_g) * params['a_att_factor']
@@ -198,7 +220,6 @@ class SimulationEngine:
         xg_h = h_attack * a_def * avg_g * params['home_adv']
         xg_a = a_attack * h_def * avg_g
 
-        # SAKATLIK VE YILDIZ OYUNCU ETKİSİ
         if params.get('h_missing', 0) > 0:
             xg_h = xg_h * (1 - (params['h_missing'] * 0.12))
         
@@ -337,8 +358,8 @@ def main():
         "La Liga": "PD", 
         "Bundesliga": "BL1", 
         "Serie A": "SA",
-        "Ligue 1 (Fransa)": "FL1", # EKLENDİ
-        "Eredivisie (Hollanda)": "DED" # EKLENDİ
+        "Ligue 1 (Fransa)": "FL1", 
+        "Eredivisie (Hollanda)": "DED"
     }
     
     c1, c2 = st.columns([1, 2])
@@ -346,13 +367,12 @@ def main():
     
     standings, fixtures = dm.fetch_data(L_MAP[league])
     
-    # HATA TOLERANSI: Eğer veri yoksa uyarı ver ve dur
     if not standings or not standings.get("standings"): 
-        st.info(t['no_match'])
-        st.stop()
+        if not fixtures or not fixtures.get("matches"):
+            st.info(t['no_match'])
+            st.stop()
 
-    # Veri İşleme (Hata önleyici .get kullanımı)
-    table = standings["standings"][0]["table"] if standings["standings"] else []
+    table = standings.get("standings", [{"table": []}])[0].get("table", [])
     
     teams = {}
     if table:
@@ -361,12 +381,16 @@ def main():
         avg_league = total_goals / total_games if total_games > 0 else 2.5
         
         for row in table:
-            teams[row["team"]["id"]] = {
-                "name": row["team"]["name"], "crest": row["team"].get("crest", CONFIG["DEFAULT_LOGO"]),
+            # LOGO KONTROLÜ: API'den gelmezse manuel listeden al
+            t_id = row["team"]["id"]
+            crest = row["team"].get("crest") or TEAM_LOGOS.get(t_id, CONFIG["DEFAULT_LOGO"])
+            
+            teams[t_id] = {
+                "name": row["team"]["name"], "crest": crest,
                 "gf": row["goalsFor"]/row["playedGames"], "ga": row["goalsAgainst"]/row["playedGames"]
             }
     else:
-        avg_league = 2.5 # Varsayılan ortalama
+        avg_league = 2.5
 
     matches = {f"{m['homeTeam']['name']} vs {m['awayTeam']['name']} ({m['utcDate'][:10]})": m 
                for m in fixtures.get("matches", []) if m["status"] in ["SCHEDULED", "TIMED"]}
@@ -379,11 +403,14 @@ def main():
         m = matches[sel_match]
         h_id, a_id = m["homeTeam"]["id"], m["awayTeam"]["id"]
         
-        # 1. Varsayılan Takım Bilgileri
-        h_team = teams.get(h_id, {"name": m["homeTeam"]["name"], "crest": CONFIG["DEFAULT_LOGO"], "gf": 1.5, "ga": 1.2})
-        a_team = teams.get(a_id, {"name": m["awayTeam"]["name"], "crest": CONFIG["DEFAULT_LOGO"], "gf": 1.4, "ga": 1.3})
+        # LOGO ZORLAMASI: Maçtan geleni kullan, yoksa takımdan, yoksa listeden
+        h_crest = m["homeTeam"].get("crest") or teams.get(h_id, {}).get("crest") or TEAM_LOGOS.get(h_id, CONFIG["DEFAULT_LOGO"])
+        a_crest = m["awayTeam"].get("crest") or teams.get(a_id, {}).get("crest") or TEAM_LOGOS.get(a_id, CONFIG["DEFAULT_LOGO"])
 
-        # 2. GÜÇ ENJEKSİYONU (Manuel Stat Override)
+        h_team = teams.get(h_id, {"name": m["homeTeam"]["name"], "crest": h_crest, "gf": 1.5, "ga": 1.2})
+        a_team = teams.get(a_id, {"name": m["awayTeam"]["name"], "crest": a_crest, "gf": 1.4, "ga": 1.3})
+        
+        # GÜÇ ENJEKSİYONU
         MANUAL_STATS = {
             2054: {"gf": 2.50, "ga": 0.80}, # Galatasaray
             2052: {"gf": 2.55, "ga": 0.85}, # Fenerbahçe
@@ -394,7 +421,7 @@ def main():
         if h_id in MANUAL_STATS: h_team.update(MANUAL_STATS[h_id])
         if a_id in MANUAL_STATS: a_team.update(MANUAL_STATS[a_id])
 
-        # 3. SİMÜLASYON
+        # SİMÜLASYON
         eng = SimulationEngine()
         with st.spinner(t['calculating']):
             current_params = params.copy()
@@ -417,6 +444,7 @@ def main():
         with c_h: st.markdown(f"<div style='text-align:center'><img src='{info['h']['crest']}' width='80'><br><h3>{info['h']['name']}</h3></div>", unsafe_allow_html=True)
         with c_vs: 
             st.markdown("<h1 style='text-align:center; color:#94a3b8'>VS</h1>", unsafe_allow_html=True)
+            # xG Değerleri (CSS ile düzeltildi)
             st.metric(t['xg'], f"{res['xg'][0]:.2f} - {res['xg'][1]:.2f}")
         with c_a: st.markdown(f"<div style='text-align:center'><img src='{info['a']['crest']}' width='80'><br><h3>{info['a']['name']}</h3></div>", unsafe_allow_html=True)
 
