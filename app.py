@@ -30,9 +30,9 @@ TRANSLATIONS = {
         "sim_param": "Simülasyon Ayarları",
         "match_count": "Simülasyon Sayısı",
         "form_set": "Takım Form Ayarları (Varsayılan: %100)",
-        "missing_p": "Eksik Kilit Oyuncu Sayısı (Sakat/Cezalı)",  # YENİ
-        "h_miss": "Ev Sahibi Eksik",  # YENİ
-        "a_miss": "Deplasman Eksik",  # YENİ
+        "missing_p": "Eksik Kilit Oyuncu Sayısı (Sakat/Cezalı)",
+        "h_miss": "Ev Sahibi Eksik",
+        "a_miss": "Deplasman Eksik",
         "h_att": "Ev Sahibi Gücü",
         "a_att": "Deplasman Gücü",
         "league": "Lig Seçimi",
@@ -46,7 +46,7 @@ TRANSLATIONS = {
         "ht_ft": "İY/MS (HT/FT) Dağılımı",
         "total_goal": "Toplam Gol Beklentisi",
         "no_match": "Bu ligde yakında maç bulunamadı.",
-        "footer": "Quantum Football v51.6 © 2026 | Model: Monte Carlo & Poisson Dağılımı | Uyarı: Bu yazılım sadece istatistiksel ve bilimsel analiz amaçlıdır. Yatırım tavsiyesi değildir."
+        "footer": "Quantum Football v51.7 © 2026 | Model: Monte Carlo & Poisson Dağılımı | Uyarı: Bu yazılım sadece istatistiksel ve bilimsel analiz amaçlıdır. Yatırım tavsiyesi değildir."
     },
     "en": {
         "app_title": "QUANTUM FOOTBALL",
@@ -55,9 +55,9 @@ TRANSLATIONS = {
         "sim_param": "Simulation Settings",
         "match_count": "Simulation Count",
         "form_set": "Team Form Settings (Default: 100%)",
-        "missing_p": "Missing Key Players (Injured/Suspended)", # YENİ
-        "h_miss": "Home Missing", # YENİ
-        "a_miss": "Away Missing", # YENİ
+        "missing_p": "Missing Key Players (Injured/Suspended)",
+        "h_miss": "Home Missing",
+        "a_miss": "Away Missing",
         "h_att": "Home Strength",
         "a_att": "Away Strength",
         "league": "Select League",
@@ -71,7 +71,7 @@ TRANSLATIONS = {
         "ht_ft": "HT/FT Distribution",
         "total_goal": "Total Goal Expectancy",
         "no_match": "No upcoming matches found in this league.",
-        "footer": "Quantum Football v51.6 © 2026 | Model: Monte Carlo & Poisson Distribution | Disclaimer: This tool is for statistical analysis only. Not financial advice."
+        "footer": "Quantum Football v51.7 © 2026 | Model: Monte Carlo & Poisson Distribution | Disclaimer: This tool is for statistical analysis only. Not financial advice."
     }
 }
 
@@ -119,7 +119,7 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 4. DATA MANAGER
+# 4. DATA MANAGER (GÜNCELLENMİŞ VE HATA TOLERANSLI)
 # -----------------------------------------------------------------------------
 if 'sim_results' not in st.session_state: st.session_state.sim_results = None
 if 'match_info' not in st.session_state: st.session_state.match_info = None
@@ -130,43 +130,56 @@ class DataManager:
 
     @st.cache_data(ttl=3600)
     def fetch_data(_self, league_code):
+        # Varsayılan boş veriler (API hatası durumunda çökmemesi için)
+        standings_data = {"standings": [{"table": []}]}
+        matches_data = {"matches": []}
+        
+        # 1. API'den Veri Çekmeyi Dene
         try:
             r1 = requests.get(f"{CONFIG['API_URL']}/competitions/{league_code}/standings", headers=_self.headers)
-            r1.raise_for_status()
-            standings_data = r1.json()
+            if r1.status_code == 200:
+                standings_data = r1.json()
             
             today = datetime.now().strftime("%Y-%m-%d")
             future = (datetime.now() + timedelta(days=90)).strftime("%Y-%m-%d")
             r2 = requests.get(f"{CONFIG['API_URL']}/competitions/{league_code}/matches", 
                               headers=_self.headers, params={"dateFrom": today, "dateTo": future})
-            r2.raise_for_status()
-            matches_data = r2.json()
+            if r2.status_code == 200:
+                matches_data = r2.json()
+        except:
+            # API hatası olursa sessizce devam et (Manuel maçlar eklenecek)
+            pass
 
-            # --- MANUEL SÜPER KUPA MAÇLARI ---
-            if league_code == "TR1" or league_code == "SC": 
-                manual_matches = [
-                    {
-                        "id": 99901,
-                        "homeTeam": {"name": "Galatasaray", "id": 2054},
-                        "awayTeam": {"name": "Trabzonspor", "id": 2061},
-                        "utcDate": "2026-01-05T17:30:00Z", # 5 Ocak 2026
-                        "status": "SCHEDULED",
-                        "competition": {"name": "TFF Süper Kupa"}
-                    },
-                    {
-                        "id": 99902,
-                        "homeTeam": {"name": "Fenerbahçe", "id": 2052},
-                        "awayTeam": {"name": "Samsunspor", "id": 2058},
-                        "utcDate": "2026-01-06T17:30:00Z", # 6 Ocak 2026
-                        "status": "SCHEDULED",
-                        "competition": {"name": "TFF Süper Kupa"}
-                    }
-                ]
-                if 'matches' in matches_data:
-                    matches_data['matches'].extend(manual_matches)
+        # 2. MANUEL SÜPER KUPA MAÇLARI (Sadece TR1 seçiliyse ekle)
+        if league_code == "TR1" or league_code == "SC": 
+            manual_matches = [
+                {
+                    "id": 99901,
+                    "homeTeam": {"name": "Galatasaray", "id": 2054},
+                    "awayTeam": {"name": "Trabzonspor", "id": 2061},
+                    "utcDate": "2026-01-05T17:30:00Z", # 5 Ocak 2026
+                    "status": "SCHEDULED",
+                    "competition": {"name": "TFF Süper Kupa"}
+                },
+                {
+                    "id": 99902,
+                    "homeTeam": {"name": "Fenerbahçe", "id": 2052},
+                    "awayTeam": {"name": "Samsunspor", "id": 2058},
+                    "utcDate": "2026-01-06T17:30:00Z", # 6 Ocak 2026
+                    "status": "SCHEDULED",
+                    "competition": {"name": "TFF Süper Kupa"}
+                }
+            ]
+            # Eğer 'matches' listesi henüz yoksa oluştur
+            if 'matches' not in matches_data:
+                matches_data['matches'] = []
+            matches_data['matches'].extend(manual_matches)
+        
+        # Eğer veri tamamen boşsa (API yok + Manuel yok) o zaman None dön
+        if not standings_data["standings"][0]["table"] and not matches_data["matches"]:
+            return None, None
             
-            return standings_data, matches_data
-        except: return None, None
+        return standings_data, matches_data
 
 # -----------------------------------------------------------------------------
 # 5. SIMULATION ENGINE
@@ -185,8 +198,7 @@ class SimulationEngine:
         xg_h = h_attack * a_def * avg_g * params['home_adv']
         xg_a = a_attack * h_def * avg_g
 
-        # --- GÜNCELLEME: SAKATLIK/EKSİK OYUNCU ETKİSİ ---
-        # Her eksik oyuncu takımın gol beklentisini (xG) %12 düşürür.
+        # SAKATLIK VE YILDIZ OYUNCU ETKİSİ
         if params.get('h_missing', 0) > 0:
             xg_h = xg_h * (1 - (params['h_missing'] * 0.12))
         
@@ -286,7 +298,7 @@ def main():
         h_att = st.slider(t['h_att'], 80, 120, 100) / 100
         a_att = st.slider(t['a_att'], 80, 120, 100) / 100
 
-        # --- YENİ EKLENTİ: SAKATLIK/EKSİK OYUNCU AYARI ---
+        # EKSİK OYUNCU AYARI
         st.caption(f"🚑 {t['missing_p']}")
         c_m1, c_m2 = st.columns(2)
         with c_m1:
@@ -298,11 +310,11 @@ def main():
             "sim_count": sim_count,
             "h_att_factor": h_att, "h_def_factor": 1.0,
             "a_att_factor": a_att, "a_def_factor": 1.0,
-            "h_missing": h_miss, "a_missing": a_miss, # Yeni parametreler eklendi
+            "h_missing": h_miss, "a_missing": a_miss,
             "home_adv": 1.15
         }
         
-        # BUY ME A COFFEE BUTONU (Sidebar)
+        # BUY ME A COFFEE BUTONU
         st.divider()
         st.markdown(
             """
@@ -318,32 +330,44 @@ def main():
     st.markdown(f"<div class='main-title'>{t['app_title']}</div>", unsafe_allow_html=True)
 
     dm = DataManager(api_key)
+    # LIG LİSTESİ (FRANSA VE HOLLANDA EKLENDİ)
     L_MAP = {
         "Premier League": "PL", 
         "Süper Lig & Kupa": "TR1", 
         "La Liga": "PD", 
         "Bundesliga": "BL1", 
-        "Serie A": "SA"
+        "Serie A": "SA",
+        "Ligue 1 (Fransa)": "FL1", # EKLENDİ
+        "Eredivisie (Hollanda)": "DED" # EKLENDİ
     }
     
     c1, c2 = st.columns([1, 2])
     with c1: league = st.selectbox(t['league'], list(L_MAP.keys()))
     
     standings, fixtures = dm.fetch_data(L_MAP[league])
-    if not standings: st.error("API Error / Limit Reached"); st.stop()
-
-    table = standings["standings"][0]["table"]
-    teams = {}
-    total_goals = sum(t["goalsFor"] for t in table)
-    total_games = sum(t["playedGames"] for t in table)
-    avg_league = total_goals / total_games if total_games > 0 else 2.5
     
-    for row in table:
-        teams[row["team"]["id"]] = {
-            "name": row["team"]["name"], "crest": row["team"].get("crest", CONFIG["DEFAULT_LOGO"]),
-            "gf": row["goalsFor"]/row["playedGames"], "ga": row["goalsAgainst"]/row["playedGames"]
-        }
+    # HATA TOLERANSI: Eğer veri yoksa uyarı ver ve dur
+    if not standings or not standings.get("standings"): 
+        st.info(t['no_match'])
+        st.stop()
+
+    # Veri İşleme (Hata önleyici .get kullanımı)
+    table = standings["standings"][0]["table"] if standings["standings"] else []
+    
+    teams = {}
+    if table:
+        total_goals = sum(t["goalsFor"] for t in table)
+        total_games = sum(t["playedGames"] for t in table)
+        avg_league = total_goals / total_games if total_games > 0 else 2.5
         
+        for row in table:
+            teams[row["team"]["id"]] = {
+                "name": row["team"]["name"], "crest": row["team"].get("crest", CONFIG["DEFAULT_LOGO"]),
+                "gf": row["goalsFor"]/row["playedGames"], "ga": row["goalsAgainst"]/row["playedGames"]
+            }
+    else:
+        avg_league = 2.5 # Varsayılan ortalama
+
     matches = {f"{m['homeTeam']['name']} vs {m['awayTeam']['name']} ({m['utcDate'][:10]})": m 
                for m in fixtures.get("matches", []) if m["status"] in ["SCHEDULED", "TIMED"]}
     
@@ -359,12 +383,10 @@ def main():
         h_team = teams.get(h_id, {"name": m["homeTeam"]["name"], "crest": CONFIG["DEFAULT_LOGO"], "gf": 1.5, "ga": 1.2})
         a_team = teams.get(a_id, {"name": m["awayTeam"]["name"], "crest": CONFIG["DEFAULT_LOGO"], "gf": 1.4, "ga": 1.3})
 
-        # 2. GÜÇ ENJEKSİYONU (Manuel Stat Override - GÜNCELLENMİŞ VE GÜÇLENDİRİLMİŞ)
-        # Yıldız oyuncu etkisi hesaba katılarak GF (Atılan Gol) oranları biraz daha artırıldı.
-        # Böylece "Eksik Oyuncu" olduğunda düşüş daha mantıklı olacak.
+        # 2. GÜÇ ENJEKSİYONU (Manuel Stat Override)
         MANUAL_STATS = {
-            2054: {"gf": 2.50, "ga": 0.80}, # Galatasaray (Yıldız Etkisi Dahil)
-            2052: {"gf": 2.55, "ga": 0.85}, # Fenerbahçe (Yıldız Etkisi Dahil)
+            2054: {"gf": 2.50, "ga": 0.80}, # Galatasaray
+            2052: {"gf": 2.55, "ga": 0.85}, # Fenerbahçe
             2061: {"gf": 1.75, "ga": 1.10}, # Trabzonspor
             2058: {"gf": 1.55, "ga": 1.20}  # Samsunspor
         }
@@ -375,7 +397,6 @@ def main():
         # 3. SİMÜLASYON
         eng = SimulationEngine()
         with st.spinner(t['calculating']):
-            # Özel Maçlar İçin Tarafsız Saha
             current_params = params.copy()
             if "Süper Kupa" in m.get("competition", {}).get("name", ""):
                 current_params["home_adv"] = 1.0 
