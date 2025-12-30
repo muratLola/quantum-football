@@ -6,7 +6,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 from datetime import datetime, timedelta
 import time
-import os  # <--- EKSİK OLAN BU SATIRDI, EKLENDİ.
+import os
 
 # -----------------------------------------------------------------------------
 # 1. SCIENTIFIC CONFIGURATION
@@ -17,7 +17,7 @@ CONFIG = {
     "COLORS": {"H": "#3b82f6", "D": "#94a3b8", "A": "#ef4444"}
 }
 
-st.set_page_config(page_title="Quantum Lab v50.1", page_icon="🧪", layout="wide")
+st.set_page_config(page_title="Quantum Lab v51.1", page_icon="🧬", layout="wide")
 
 # -----------------------------------------------------------------------------
 # 2. LABORATORY UI STYLES
@@ -30,13 +30,8 @@ st.markdown("""
     .lab-title {
         font-family: 'Roboto Mono', monospace; font-size: 3rem; font-weight: 800;
         text-align: center; margin-bottom: 10px;
-        background: linear-gradient(90deg, #22d3ee, #818cf8);
+        background: linear-gradient(90deg, #10b981, #3b82f6);
         -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-    }
-    
-    .scenario-box {
-        background: rgba(30, 41, 59, 0.5); border: 1px solid #334155; 
-        border-radius: 12px; padding: 20px; margin-bottom: 20px;
     }
     
     .stat-card {
@@ -46,7 +41,15 @@ st.markdown("""
     .stat-val { font-size: 2rem; font-weight: 700; color: #fff; }
     .stat-lbl { font-size: 0.8rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 1px; }
     
-    .heatmap-container { border: 1px solid #334155; border-radius: 12px; overflow: hidden; }
+    .analysis-box {
+        background: rgba(30, 41, 59, 0.4); border: 1px solid #334155; 
+        border-radius: 12px; padding: 15px; height: 100%;
+    }
+    
+    .score-row {
+        display: flex; justify-content: space-between; padding: 8px; 
+        border-bottom: 1px solid #334155; font-family: 'Roboto Mono';
+    }
     </style>
     """, unsafe_allow_html=True)
 
@@ -63,10 +66,14 @@ class DataManager:
     @st.cache_data(ttl=3600)
     def fetch_data(_self, league_code):
         try:
+            # Puan Durumu
             r1 = requests.get(f"{CONFIG['API_URL']}/competitions/{league_code}/standings", headers=_self.headers)
             r1.raise_for_status()
+            
+            # Fikstür: Gelecek 90 GÜN (Bütün maçları yakalamak için)
             today = datetime.now().strftime("%Y-%m-%d")
-            future = (datetime.now() + timedelta(days=14)).strftime("%Y-%m-%d")
+            future = (datetime.now() + timedelta(days=90)).strftime("%Y-%m-%d")
+            
             r2 = requests.get(f"{CONFIG['API_URL']}/competitions/{league_code}/matches", 
                               headers=_self.headers, params={"dateFrom": today, "dateTo": future})
             r2.raise_for_status()
@@ -74,14 +81,14 @@ class DataManager:
         except: return None, None
 
 # -----------------------------------------------------------------------------
-# 4. QUANTUM SIMULATION ENGINE (v50 CORE)
+# 4. QUANTUM SIMULATION ENGINE (v51 FUSION)
 # -----------------------------------------------------------------------------
 class SimulationEngine:
     def __init__(self):
         self.rng = np.random.default_rng()
 
     def run_monte_carlo(self, h_stats, a_stats, avg_g, params):
-        # 1. Parametrik xG Hesaplama (Senaryo Modu)
+        # 1. Parametrik xG Hesaplama
         h_attack = (h_stats['gf'] / avg_g) * params['h_att_factor']
         h_def = (h_stats['ga'] / avg_g) * params['h_def_factor']
         a_attack = (a_stats['gf'] / avg_g) * params['a_att_factor']
@@ -90,31 +97,26 @@ class SimulationEngine:
         xg_h = h_attack * a_def * avg_g * params['home_adv']
         xg_a = a_attack * h_def * avg_g
 
-        # 2. HT/FT Split
-        xg_h_ht, xg_h_ft = xg_h * 0.45, xg_h * 0.55
-        xg_a_ht, xg_a_ft = xg_a * 0.45, xg_a * 0.55
-
-        # 3. Büyük Ölçekli Simülasyon
+        # 2. Simülasyon
         sims = params['sim_count']
         
-        gh_ht = self.rng.poisson(xg_h_ht, sims)
-        ga_ht = self.rng.poisson(xg_a_ht, sims)
-        gh_ft = self.rng.poisson(xg_h_ft, sims)
-        ga_ft = self.rng.poisson(xg_a_ft, sims)
+        # İlk Yarı / İkinci Yarı (HT/FT)
+        gh_ht = self.rng.poisson(xg_h * 0.45, sims)
+        ga_ht = self.rng.poisson(xg_a * 0.45, sims)
+        gh_ft = self.rng.poisson(xg_h * 0.55, sims)
+        ga_ft = self.rng.poisson(xg_a * 0.55, sims)
 
         total_h = gh_ht + gh_ft
         total_a = ga_ht + ga_ft
 
         return {
-            "h_goals": total_h, "a_goals": total_a,
-            "ht_res": (gh_ht, ga_ht),
-            "ft_res": (total_h, total_a),
-            "xg": (xg_h, xg_a),
-            "sims": sims
+            "h": total_h, "a": total_a,
+            "ht": (gh_ht, ga_ht), "ft": (total_h, total_a),
+            "xg": (xg_h, xg_a), "sims": sims
         }
 
     def analyze_results(self, data):
-        h, a = data["h_goals"], data["a_goals"]
+        h, a = data["h"], data["a"]
         sims = data["sims"]
 
         # 1X2 Olasılıkları
@@ -128,9 +130,23 @@ class SimulationEngine:
             for j in range(6):
                 matrix[i, j] = np.sum((h == i) & (a == j)) / sims * 100
 
-        # HT/FT Analizi
-        h_ht, a_ht = data["ht_res"]
-        ht_res = np.where(h_ht > a_ht, 1, np.where(h_ht < a_ht, 2, 0)) # 1, 0, 2
+        # En Olası 10 Skor (Liste)
+        scores = [f"{i}-{j}" for i, j in zip(h, a)]
+        unique, counts = np.unique(scores, return_counts=True)
+        top_scores = sorted(zip(unique, counts/sims*100), key=lambda x: x[1], reverse=True)[:10]
+
+        # Toplam Gol Dağılımı (Pie Chart)
+        total_goals = h + a
+        goal_bins = {
+            "0-1": np.sum(total_goals <= 1) / sims * 100,
+            "2-3": np.sum((total_goals >= 2) & (total_goals <= 3)) / sims * 100,
+            "4-6": np.sum((total_goals >= 4) & (total_goals <= 6)) / sims * 100,
+            "7+": np.sum(total_goals >= 7) / sims * 100
+        }
+
+        # HT/FT
+        h_ht, a_ht = data["ht"]
+        ht_res = np.where(h_ht > a_ht, 1, np.where(h_ht < a_ht, 2, 0))
         ft_res = np.where(h > a, 1, np.where(h < a, 2, 0))
         
         htft = {}
@@ -143,6 +159,8 @@ class SimulationEngine:
         return {
             "1x2": [p_home, p_draw, p_away],
             "matrix": matrix,
+            "top_scores": top_scores,
+            "goal_bins": goal_bins,
             "htft": htft,
             "xg": data["xg"]
         }
@@ -159,10 +177,11 @@ def main():
             api_key = st.text_input("API Key", type="password")
             if not api_key: st.stop()
             
-        st.subheader("Senaryo Parametreleri")
-        sim_count = st.select_slider("Simülasyon Sayısı", options=[10000, 50000, 100000, 500000], value=100000)
-        h_att = st.slider("Ev Sahibi Form (%)", 80, 120, 100) / 100
-        a_att = st.slider("Deplasman Form (%)", 80, 120, 100) / 100
+        st.subheader("Simülasyon Parametreleri")
+        sim_count = st.select_slider("Maç Sayısı", options=[10000, 100000, 500000], value=100000)
+        st.caption("Takım Form Ayarları (Varsayılan: %100)")
+        h_att = st.slider("Ev Sahibi Saldırı Gücü", 80, 120, 100) / 100
+        a_att = st.slider("Deplasman Saldırı Gücü", 80, 120, 100) / 100
         
         params = {
             "sim_count": sim_count,
@@ -171,18 +190,17 @@ def main():
             "home_adv": 1.15
         }
 
-    st.markdown("<div class='lab-title'>QUANTUM LAB v50.1</div>", unsafe_allow_html=True)
+    st.markdown("<div class='lab-title'>QUANTUM LAB v51.1</div>", unsafe_allow_html=True)
 
     dm = DataManager(api_key)
     L_MAP = {"Premier League": "PL", "Süper Lig": "TR1", "La Liga": "PD", "Bundesliga": "BL1", "Serie A": "SA"}
     
     c1, c2 = st.columns([1, 2])
-    with c1: league = st.selectbox("Lig", list(L_MAP.keys()))
+    with c1: league = st.selectbox("Lig Seçimi", list(L_MAP.keys()))
     
     standings, fixtures = dm.fetch_data(L_MAP[league])
     if not standings: st.error("Veri Alınamadı veya API limiti doldu."); st.stop()
 
-    # İstatistikler
     table = standings["standings"][0]["table"]
     teams = {}
     total_goals = sum(t["goalsFor"] for t in table)
@@ -195,66 +213,91 @@ def main():
             "gf": t["goalsFor"]/t["playedGames"], "ga": t["goalsAgainst"]/t["playedGames"]
         }
         
-    matches = {f"{m['homeTeam']['name']} vs {m['awayTeam']['name']}": m for m in fixtures["matches"] if m["status"] == "SCHEDULED"}
+    # Genişletilmiş Tarih Aralığı + TIMED statüsü
+    matches = {f"{m['homeTeam']['name']} vs {m['awayTeam']['name']} (Tarih: {m['utcDate'][:10]})": m 
+               for m in fixtures["matches"] if m["status"] in ["SCHEDULED", "TIMED"]}
     
-    if not matches:
-        st.info("Bu ligde yakında oynanacak maç bulunamadı.")
-        st.stop()
+    if not matches: st.info("Gelecek 90 gün içinde bu ligde planlanmış maç bulunamadı. Lütfen başka bir lig seçin."); st.stop()
 
-    with c2: sel_match = st.selectbox("Maç", list(matches.keys()))
+    with c2: sel_match = st.selectbox("Analiz Edilecek Maç", list(matches.keys()))
 
-    if st.button(f"SİMÜLASYONU BAŞLAT ({sim_count//1000}K MAÇ)", use_container_width=True):
+    if st.button(f"DENEYİ BAŞLAT ({sim_count//1000}K SİMÜLASYON)", use_container_width=True):
         m = matches[sel_match]
         h_id, a_id = m["homeTeam"]["id"], m["awayTeam"]["id"]
         
         eng = SimulationEngine()
-        with st.spinner("Monte Carlo Motoru Çalışıyor..."):
+        with st.spinner("Kuantum motoru olasılıkları hesaplıyor..."):
             raw_data = eng.run_monte_carlo(teams[h_id], teams[a_id], avg_league, params)
             res = eng.analyze_results(raw_data)
             
         st.session_state.sim_results = res
         st.session_state.match_info = {"h": teams[h_id], "a": teams[a_id]}
 
-    # --- SONUÇ EKRANI ---
+    # --- SONUÇ PANELİ ---
     if st.session_state.sim_results:
         res = st.session_state.sim_results
         info = st.session_state.match_info
         
-        # 1. Başlık & xG
+        # 1. Header
         c_h, c_vs, c_a = st.columns([2,1,2])
         with c_h: st.markdown(f"<div style='text-align:center'><img src='{info['h']['crest']}' width='80'><br><h3>{info['h']['name']}</h3></div>", unsafe_allow_html=True)
         with c_vs: 
             st.markdown("<h1 style='text-align:center; color:#94a3b8'>VS</h1>", unsafe_allow_html=True)
-            st.metric("Beklenen Gol (xG)", f"{res['xg'][0]:.2f} - {res['xg'][1]:.2f}")
+            st.metric("xG (Beklenen Gol)", f"{res['xg'][0]:.2f} - {res['xg'][1]:.2f}")
         with c_a: st.markdown(f"<div style='text-align:center'><img src='{info['a']['crest']}' width='80'><br><h3>{info['a']['name']}</h3></div>", unsafe_allow_html=True)
 
         st.divider()
 
-        # 2. Olasılık Kartları
+        # 2. Ana Olasılıklar
         k1, k2, k3 = st.columns(3)
         k1.markdown(f"<div class='stat-card'><div class='stat-lbl'>EV SAHİBİ</div><div class='stat-val' style='color:#3b82f6'>%{res['1x2'][0]:.1f}</div></div>", unsafe_allow_html=True)
         k2.markdown(f"<div class='stat-card'><div class='stat-lbl'>BERABERLİK</div><div class='stat-val' style='color:#94a3b8'>%{res['1x2'][1]:.1f}</div></div>", unsafe_allow_html=True)
         k3.markdown(f"<div class='stat-card'><div class='stat-lbl'>DEPLASMAN</div><div class='stat-val' style='color:#ef4444'>%{res['1x2'][2]:.1f}</div></div>", unsafe_allow_html=True)
 
-        # 3. Skor Isı Haritası (Heatmap)
-        st.subheader("🔥 Skor Olasılık Matrisi (Heatmap)")
-        fig_heat = go.Figure(data=go.Heatmap(
-            z=res["matrix"],
-            x=[0,1,2,3,4,5], y=[0,1,2,3,4,5],
-            colorscale='Magma', texttemplate="%{z:.1f}%"
-        ))
-        fig_heat.update_layout(
-            xaxis_title="Deplasman Golü", yaxis_title="Ev Sahibi Golü",
-            height=400, paper_bgcolor='rgba(0,0,0,0)', font_color='white'
-        )
-        st.plotly_chart(fig_heat, use_container_width=True)
+        st.write("")
 
-        # 4. HT/FT Analizi
-        st.subheader("⏱️ İlk Yarı / Maç Sonu Dağılımı")
-        htft_data = pd.DataFrame(list(res['htft'].items()), columns=['Sonuç', 'Olasılık'])
-        fig_bar = px.bar(htft_data, x='Sonuç', y='Olasılık', color='Olasılık', color_continuous_scale='Viridis')
-        fig_bar.update_layout(height=300, paper_bgcolor='rgba(0,0,0,0)', font_color='white')
-        st.plotly_chart(fig_bar, use_container_width=True)
+        # 3. DETAYLI ANALİZ (HEATMAP + SKOR LİSTESİ)
+        c_heat, c_list = st.columns([2, 1])
+        
+        with c_heat:
+            st.markdown("### 🔥 Skor Olasılık Matrisi")
+            fig_heat = go.Figure(data=go.Heatmap(
+                z=res["matrix"], x=[0,1,2,3,4,5], y=[0,1,2,3,4,5],
+                colorscale='Magma', texttemplate="%{z:.1f}%"
+            ))
+            fig_heat.update_layout(xaxis_title="Deplasman", yaxis_title="Ev Sahibi", height=400, margin=dict(l=0,r=0,t=0,b=0), paper_bgcolor='rgba(0,0,0,0)', font_color='white')
+            st.plotly_chart(fig_heat, use_container_width=True)
+            
+        with c_list:
+            st.markdown("### 🎯 En Olası Skorlar")
+            with st.container():
+                st.markdown("<div class='analysis-box'>", unsafe_allow_html=True)
+                for score, prob in res["top_scores"][:7]:
+                    st.markdown(f"""
+                    <div class='score-row'>
+                        <span style='font-weight:bold; font-size:1.2rem'>{score}</span>
+                        <span style='color:#38bdf8; font-weight:bold'>%{prob:.1f}</span>
+                    </div>
+                    """, unsafe_allow_html=True)
+                st.markdown("</div>", unsafe_allow_html=True)
+
+        # 4. GOL ANALİZİ (HT/FT + PIE)
+        c_ht, c_goal = st.columns(2)
+        
+        with c_ht:
+            st.markdown("### ⏱️ İY/MS (HT/FT) Dağılımı")
+            htft_df = pd.DataFrame(list(res['htft'].items()), columns=['Sonuç', 'Olasılık']).sort_values('Olasılık', ascending=False).head(7)
+            fig_bar = px.bar(htft_df, x='Sonuç', y='Olasılık', text_auto='.1f', color='Olasılık', color_continuous_scale='Viridis')
+            fig_bar.update_layout(height=300, paper_bgcolor='rgba(0,0,0,0)', font_color='white')
+            st.plotly_chart(fig_bar, use_container_width=True)
+            
+        with c_goal:
+            st.markdown("### 🥅 Toplam Gol Beklentisi")
+            g_labels = list(res["goal_bins"].keys())
+            g_vals = list(res["goal_bins"].values())
+            fig_pie = go.Figure(data=[go.Pie(labels=g_labels, values=g_vals, hole=.4, marker=dict(colors=['#94a3b8', '#3b82f6', '#8b5cf6', '#f43f5e']))])
+            fig_pie.update_layout(height=300, margin=dict(t=0,b=0,l=0,r=0), paper_bgcolor='rgba(0,0,0,0)', font_color='white')
+            st.plotly_chart(fig_pie, use_container_width=True)
 
 if __name__ == "__main__":
     main()
