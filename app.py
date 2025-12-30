@@ -46,7 +46,7 @@ TRANSLATIONS = {
         "ht_ft": "İY/MS (HT/FT) Dağılımı",
         "total_goal": "Toplam Gol Beklentisi",
         "no_match": "Bu ligde yakında maç bulunamadı.",
-        "footer": "Quantum Football v51.9 © 2026 | Model: Monte Carlo & Poisson Dağılımı | Uyarı: Bu yazılım sadece istatistiksel ve bilimsel analiz amaçlıdır. Yatırım tavsiyesi değildir."
+        "footer": "Quantum Football v52.0 © 2026 | Model: Monte Carlo & Poisson Dağılımı | Uyarı: Bu yazılım sadece istatistiksel ve bilimsel analiz amaçlıdır. Yatırım tavsiyesi değildir."
     },
     "en": {
         "app_title": "QUANTUM FOOTBALL",
@@ -71,7 +71,7 @@ TRANSLATIONS = {
         "ht_ft": "HT/FT Distribution",
         "total_goal": "Total Goal Expectancy",
         "no_match": "No upcoming matches found in this league.",
-        "footer": "Quantum Football v51.9 © 2026 | Model: Monte Carlo & Poisson Distribution | Disclaimer: This tool is for statistical analysis only. Not financial advice."
+        "footer": "Quantum Football v52.0 © 2026 | Model: Monte Carlo & Poisson Distribution | Disclaimer: This tool is for statistical analysis only. Not financial advice."
     }
 }
 
@@ -127,29 +127,39 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 4. DATA MANAGER (DÜZELTİLDİ: Tüm Logolar)
+# 4. DATA MANAGER (DÜZELTİLDİ: GARANTİ LOGOLAR)
 # -----------------------------------------------------------------------------
 if 'sim_results' not in st.session_state: st.session_state.sim_results = None
 if 'match_info' not in st.session_state: st.session_state.match_info = None
 
-# TÜM TAKIM LOGOLARI LİSTESİ (Genişletildi)
+# TÜM TAKIM LOGOLARI LİSTESİ (Wikimedia Garantili Linkler)
 TEAM_LOGOS = {
-    2054: "https://crests.football-data.org/2054.png", # Galatasaray
-    2052: "https://crests.football-data.org/2052.png", # Fenerbahçe
-    2061: "https://crests.football-data.org/2061.png", # Trabzonspor
-    2058: "https://crests.football-data.org/2058.png", # Samsunspor
-    2036: "https://crests.football-data.org/2036.png", # Beşiktaş
-    4503: "https://crests.football-data.org/4503.png", # Başakşehir
-    2044: "https://crests.football-data.org/2044.png", # Kasımpaşa
-    2037: "https://crests.football-data.org/2037.png", # Antalyaspor
-    2053: "https://crests.football-data.org/2053.png", # Sivasspor
-    2049: "https://crests.football-data.org/2049.png", # Konyaspor
-    2043: "https://crests.football-data.org/2043.png", # Kayserispor
-    5553: "https://crests.football-data.org/5553.png", # Alanyaspor
-    2051: "https://crests.football-data.org/2051.png", # Gaziantep FK
-    5642: "https://crests.football-data.org/5642.png", # Hatayspor
-    2055: "https://crests.football-data.org/2055.png", # Çaykur Rizespor
-    859: "https://crests.football-data.org/859.png", # Adana Demirspor
+    # 4 BÜYÜKLER
+    2054: "https://upload.wikimedia.org/wikipedia/commons/f/f6/Galatasaray_Sports_Club_Logo.png", # Galatasaray
+    2052: "https://upload.wikimedia.org/wikipedia/tr/8/86/Fenerbah%C3%A7e_SK.png", # Fenerbahçe
+    2036: "https://upload.wikimedia.org/wikipedia/commons/2/20/Besiktas_jk.png", # Beşiktaş
+    2061: "https://upload.wikimedia.org/wikipedia/tr/a/ab/Trabzonspor_Amblemi.png", # Trabzonspor
+    
+    # DİĞERLERİ
+    2058: "https://upload.wikimedia.org/wikipedia/tr/e/e0/Samsunspor_logo_2.png", # Samsunspor
+    4503: "https://upload.wikimedia.org/wikipedia/tr/d/d3/%C4%B0stanbul_Ba%C5%9Fak%C5%9Fehir_FK.png", # Başakşehir
+    2044: "https://upload.wikimedia.org/wikipedia/tr/6/6c/Kasimpasa_logo.png", # Kasımpaşa
+    2037: "https://upload.wikimedia.org/wikipedia/tr/5/52/Antalyaspor_logo.png", # Antalyaspor
+    2053: "https://upload.wikimedia.org/wikipedia/tr/9/9f/Sivasspor.png", # Sivasspor
+    2049: "https://upload.wikimedia.org/wikipedia/commons/1/1b/Konyaspor_Logo.png", # Konyaspor
+    2043: "https://upload.wikimedia.org/wikipedia/tr/0/00/Kayserispor_logosu.png", # Kayserispor
+    5553: "https://upload.wikimedia.org/wikipedia/tr/5/5f/Alanyaspor_logo.png", # Alanyaspor
+    2051: "https://upload.wikimedia.org/wikipedia/tr/e/ee/Gaziantep_FK.png", # Gaziantep FK
+    5642: "https://upload.wikimedia.org/wikipedia/tr/9/9a/Hatayspor_logo.png", # Hatayspor
+    2055: "https://upload.wikimedia.org/wikipedia/tr/2/2e/%C3%87aykur_Rizespor_logo.png", # Çaykur Rizespor
+    859: "https://upload.wikimedia.org/wikipedia/tr/2/26/Adana_Demirspor_logo.png", # Adana Demirspor
+    
+    # DÜŞME HATTI VE YENİLER
+    5532: "https://upload.wikimedia.org/wikipedia/tr/7/74/Fatih_Karag%C3%BCmr%C3%BCk_SK_logo.png", # Karagümrük
+    5529: "https://upload.wikimedia.org/wikipedia/tr/2/23/MKE_Ankarag%C3%BCc%C3%BC_logo.png", # Ankaragücü
+    5523: "https://upload.wikimedia.org/wikipedia/tr/7/7d/Pendikspor_logo.png", # Pendikspor
+    5531: "https://upload.wikimedia.org/wikipedia/tr/7/77/G%C3%B6ztepe_logo.png", # Göztepe (Olası)
+    2032: "https://upload.wikimedia.org/wikipedia/tr/9/9a/Ey%C3%BCpspor_logo.png" # Eyüpspor (Olası)
 }
 
 class DataManager:
@@ -180,16 +190,16 @@ class DataManager:
             manual_matches = [
                 {
                     "id": 99901,
-                    "homeTeam": {"name": "Galatasaray", "id": 2054, "crest": TEAM_LOGOS[2054]},
-                    "awayTeam": {"name": "Trabzonspor", "id": 2061, "crest": TEAM_LOGOS[2061]},
+                    "homeTeam": {"name": "Galatasaray", "id": 2054, "crest": TEAM_LOGOS.get(2054)},
+                    "awayTeam": {"name": "Trabzonspor", "id": 2061, "crest": TEAM_LOGOS.get(2061)},
                     "utcDate": "2026-01-05T17:30:00Z",
                     "status": "SCHEDULED",
                     "competition": {"name": "TFF Süper Kupa"}
                 },
                 {
                     "id": 99902,
-                    "homeTeam": {"name": "Fenerbahçe", "id": 2052, "crest": TEAM_LOGOS[2052]},
-                    "awayTeam": {"name": "Samsunspor", "id": 2058, "crest": TEAM_LOGOS[2058]},
+                    "homeTeam": {"name": "Fenerbahçe", "id": 2052, "crest": TEAM_LOGOS.get(2052)},
+                    "awayTeam": {"name": "Samsunspor", "id": 2058, "crest": TEAM_LOGOS.get(2058)},
                     "utcDate": "2026-01-06T17:30:00Z",
                     "status": "SCHEDULED",
                     "competition": {"name": "TFF Süper Kupa"}
@@ -403,14 +413,14 @@ def main():
         m = matches[sel_match]
         h_id, a_id = m["homeTeam"]["id"], m["awayTeam"]["id"]
         
-        # LOGO ZORLAMASI: Maçtan geleni kullan, yoksa takımdan, yoksa listeden
+        # LOGO ZORLAMASI: Maçtan geleni kullan, yoksa takımdan, yoksa listeden (Garanti Wikimedia)
         h_crest = m["homeTeam"].get("crest") or teams.get(h_id, {}).get("crest") or TEAM_LOGOS.get(h_id, CONFIG["DEFAULT_LOGO"])
         a_crest = m["awayTeam"].get("crest") or teams.get(a_id, {}).get("crest") or TEAM_LOGOS.get(a_id, CONFIG["DEFAULT_LOGO"])
 
         h_team = teams.get(h_id, {"name": m["homeTeam"]["name"], "crest": h_crest, "gf": 1.5, "ga": 1.2})
         a_team = teams.get(a_id, {"name": m["awayTeam"]["name"], "crest": a_crest, "gf": 1.4, "ga": 1.3})
         
-        # GÜÇ ENJEKSİYONU
+        # GÜÇ ENJEKSİYONU (Yıldız Oyuncu Etkili)
         MANUAL_STATS = {
             2054: {"gf": 2.50, "ga": 0.80}, # Galatasaray
             2052: {"gf": 2.55, "ga": 0.85}, # Fenerbahçe
