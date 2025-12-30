@@ -30,6 +30,9 @@ TRANSLATIONS = {
         "sim_param": "Simülasyon Ayarları",
         "match_count": "Simülasyon Sayısı",
         "form_set": "Takım Form Ayarları (Varsayılan: %100)",
+        "missing_p": "Eksik Kilit Oyuncu Sayısı (Sakat/Cezalı)",  # YENİ
+        "h_miss": "Ev Sahibi Eksik",  # YENİ
+        "a_miss": "Deplasman Eksik",  # YENİ
         "h_att": "Ev Sahibi Gücü",
         "a_att": "Deplasman Gücü",
         "league": "Lig Seçimi",
@@ -43,7 +46,7 @@ TRANSLATIONS = {
         "ht_ft": "İY/MS (HT/FT) Dağılımı",
         "total_goal": "Toplam Gol Beklentisi",
         "no_match": "Bu ligde yakında maç bulunamadı.",
-        "footer": "Quantum Football v51.3 © 2025 | Model: Monte Carlo & Poisson Dağılımı | Uyarı: Bu yazılım sadece istatistiksel ve bilimsel analiz amaçlıdır. Yatırım tavsiyesi değildir."
+        "footer": "Quantum Football v51.6 © 2026 | Model: Monte Carlo & Poisson Dağılımı | Uyarı: Bu yazılım sadece istatistiksel ve bilimsel analiz amaçlıdır. Yatırım tavsiyesi değildir."
     },
     "en": {
         "app_title": "QUANTUM FOOTBALL",
@@ -52,6 +55,9 @@ TRANSLATIONS = {
         "sim_param": "Simulation Settings",
         "match_count": "Simulation Count",
         "form_set": "Team Form Settings (Default: 100%)",
+        "missing_p": "Missing Key Players (Injured/Suspended)", # YENİ
+        "h_miss": "Home Missing", # YENİ
+        "a_miss": "Away Missing", # YENİ
         "h_att": "Home Strength",
         "a_att": "Away Strength",
         "league": "Select League",
@@ -65,7 +71,7 @@ TRANSLATIONS = {
         "ht_ft": "HT/FT Distribution",
         "total_goal": "Total Goal Expectancy",
         "no_match": "No upcoming matches found in this league.",
-        "footer": "Quantum Football v51.3 © 2025 | Model: Monte Carlo & Poisson Distribution | Disclaimer: This tool is for statistical analysis only. Not financial advice."
+        "footer": "Quantum Football v51.6 © 2026 | Model: Monte Carlo & Poisson Distribution | Disclaimer: This tool is for statistical analysis only. Not financial advice."
     }
 }
 
@@ -127,12 +133,39 @@ class DataManager:
         try:
             r1 = requests.get(f"{CONFIG['API_URL']}/competitions/{league_code}/standings", headers=_self.headers)
             r1.raise_for_status()
+            standings_data = r1.json()
+            
             today = datetime.now().strftime("%Y-%m-%d")
             future = (datetime.now() + timedelta(days=90)).strftime("%Y-%m-%d")
             r2 = requests.get(f"{CONFIG['API_URL']}/competitions/{league_code}/matches", 
                               headers=_self.headers, params={"dateFrom": today, "dateTo": future})
             r2.raise_for_status()
-            return r1.json(), r2.json()
+            matches_data = r2.json()
+
+            # --- MANUEL SÜPER KUPA MAÇLARI ---
+            if league_code == "TR1" or league_code == "SC": 
+                manual_matches = [
+                    {
+                        "id": 99901,
+                        "homeTeam": {"name": "Galatasaray", "id": 2054},
+                        "awayTeam": {"name": "Trabzonspor", "id": 2061},
+                        "utcDate": "2026-01-05T17:30:00Z", # 5 Ocak 2026
+                        "status": "SCHEDULED",
+                        "competition": {"name": "TFF Süper Kupa"}
+                    },
+                    {
+                        "id": 99902,
+                        "homeTeam": {"name": "Fenerbahçe", "id": 2052},
+                        "awayTeam": {"name": "Samsunspor", "id": 2058},
+                        "utcDate": "2026-01-06T17:30:00Z", # 6 Ocak 2026
+                        "status": "SCHEDULED",
+                        "competition": {"name": "TFF Süper Kupa"}
+                    }
+                ]
+                if 'matches' in matches_data:
+                    matches_data['matches'].extend(manual_matches)
+            
+            return standings_data, matches_data
         except: return None, None
 
 # -----------------------------------------------------------------------------
@@ -143,6 +176,7 @@ class SimulationEngine:
         self.rng = np.random.default_rng()
 
     def run_monte_carlo(self, h_stats, a_stats, avg_g, params):
+        # Parametrik xG Hesaplama
         h_attack = (h_stats['gf'] / avg_g) * params['h_att_factor']
         h_def = (h_stats['ga'] / avg_g) * params['h_def_factor']
         a_attack = (a_stats['gf'] / avg_g) * params['a_att_factor']
@@ -150,6 +184,14 @@ class SimulationEngine:
 
         xg_h = h_attack * a_def * avg_g * params['home_adv']
         xg_a = a_attack * h_def * avg_g
+
+        # --- GÜNCELLEME: SAKATLIK/EKSİK OYUNCU ETKİSİ ---
+        # Her eksik oyuncu takımın gol beklentisini (xG) %12 düşürür.
+        if params.get('h_missing', 0) > 0:
+            xg_h = xg_h * (1 - (params['h_missing'] * 0.12))
+        
+        if params.get('a_missing', 0) > 0:
+            xg_a = xg_a * (1 - (params['a_missing'] * 0.12))
 
         sims = params['sim_count']
         gh_ht = self.rng.poisson(xg_h * 0.45, sims)
@@ -243,18 +285,46 @@ def main():
         st.caption(t['form_set'])
         h_att = st.slider(t['h_att'], 80, 120, 100) / 100
         a_att = st.slider(t['a_att'], 80, 120, 100) / 100
+
+        # --- YENİ EKLENTİ: SAKATLIK/EKSİK OYUNCU AYARI ---
+        st.caption(f"🚑 {t['missing_p']}")
+        c_m1, c_m2 = st.columns(2)
+        with c_m1:
+            h_miss = st.number_input(t['h_miss'], 0, 5, 0)
+        with c_m2:
+            a_miss = st.number_input(t['a_miss'], 0, 5, 0)
         
         params = {
             "sim_count": sim_count,
             "h_att_factor": h_att, "h_def_factor": 1.0,
             "a_att_factor": a_att, "a_def_factor": 1.0,
+            "h_missing": h_miss, "a_missing": a_miss, # Yeni parametreler eklendi
             "home_adv": 1.15
         }
+        
+        # BUY ME A COFFEE BUTONU (Sidebar)
+        st.divider()
+        st.markdown(
+            """
+            <div style="text-align: center;">
+                <a href="https://www.buymeacoffee.com/muratlola" target="_blank">
+                    <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" style="height: 50px !important;width: 217px !important;" >
+                </a>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
 
     st.markdown(f"<div class='main-title'>{t['app_title']}</div>", unsafe_allow_html=True)
 
     dm = DataManager(api_key)
-    L_MAP = {"Premier League": "PL", "Süper Lig": "TR1", "La Liga": "PD", "Bundesliga": "BL1", "Serie A": "SA"}
+    L_MAP = {
+        "Premier League": "PL", 
+        "Süper Lig & Kupa": "TR1", 
+        "La Liga": "PD", 
+        "Bundesliga": "BL1", 
+        "Serie A": "SA"
+    }
     
     c1, c2 = st.columns([1, 2])
     with c1: league = st.selectbox(t['league'], list(L_MAP.keys()))
@@ -275,7 +345,7 @@ def main():
         }
         
     matches = {f"{m['homeTeam']['name']} vs {m['awayTeam']['name']} ({m['utcDate'][:10]})": m 
-               for m in fixtures["matches"] if m["status"] in ["SCHEDULED", "TIMED"]}
+               for m in fixtures.get("matches", []) if m["status"] in ["SCHEDULED", "TIMED"]}
     
     if not matches: st.info(t['no_match']); st.stop()
 
@@ -285,13 +355,36 @@ def main():
         m = matches[sel_match]
         h_id, a_id = m["homeTeam"]["id"], m["awayTeam"]["id"]
         
+        # 1. Varsayılan Takım Bilgileri
+        h_team = teams.get(h_id, {"name": m["homeTeam"]["name"], "crest": CONFIG["DEFAULT_LOGO"], "gf": 1.5, "ga": 1.2})
+        a_team = teams.get(a_id, {"name": m["awayTeam"]["name"], "crest": CONFIG["DEFAULT_LOGO"], "gf": 1.4, "ga": 1.3})
+
+        # 2. GÜÇ ENJEKSİYONU (Manuel Stat Override - GÜNCELLENMİŞ VE GÜÇLENDİRİLMİŞ)
+        # Yıldız oyuncu etkisi hesaba katılarak GF (Atılan Gol) oranları biraz daha artırıldı.
+        # Böylece "Eksik Oyuncu" olduğunda düşüş daha mantıklı olacak.
+        MANUAL_STATS = {
+            2054: {"gf": 2.50, "ga": 0.80}, # Galatasaray (Yıldız Etkisi Dahil)
+            2052: {"gf": 2.55, "ga": 0.85}, # Fenerbahçe (Yıldız Etkisi Dahil)
+            2061: {"gf": 1.75, "ga": 1.10}, # Trabzonspor
+            2058: {"gf": 1.55, "ga": 1.20}  # Samsunspor
+        }
+
+        if h_id in MANUAL_STATS: h_team.update(MANUAL_STATS[h_id])
+        if a_id in MANUAL_STATS: a_team.update(MANUAL_STATS[a_id])
+
+        # 3. SİMÜLASYON
         eng = SimulationEngine()
         with st.spinner(t['calculating']):
-            raw_data = eng.run_monte_carlo(teams[h_id], teams[a_id], avg_league, params)
+            # Özel Maçlar İçin Tarafsız Saha
+            current_params = params.copy()
+            if "Süper Kupa" in m.get("competition", {}).get("name", ""):
+                current_params["home_adv"] = 1.0 
+            
+            raw_data = eng.run_monte_carlo(h_team, a_team, avg_league, current_params)
             res = eng.analyze_results(raw_data)
             
         st.session_state.sim_results = res
-        st.session_state.match_info = {"h": teams[h_id], "a": teams[a_id]}
+        st.session_state.match_info = {"h": h_team, "a": a_team}
 
     # --- SONUÇ EKRANI ---
     if st.session_state.sim_results:
