@@ -9,33 +9,31 @@ import time
 import os
 
 # -----------------------------------------------------------------------------
-# 1. KONFİGÜRASYON (ÇİFT ANAHTAR SİSTEMİ)
+# 1. KONFIGURASYON & ANAHTARLAR
 # -----------------------------------------------------------------------------
 CONFIG = {
     "DEFAULT_LOGO": "https://cdn-icons-png.flaticon.com/512/53/53283.png",
-    # STANDART API (Mevcut Kodun Kullandığı)
     "STD_API_URL": "https://api.football-data.org/v4",
-    # PRO API (Sadece Danimarka ve İskoçya İçin)
     "PRO_API_URL": "https://api.sportmonks.com/v3/football",
-    "PRO_TOKEN": "GL0xxZHLVkzEUypMQdNkKow4NI0FPrlzJ4IfalN7rV6Qlc2u3M1iXDlAfCzx",
+    "PRO_TOKEN": "GL0xxZHLVkzEUypMQdNkKow4NI0FPrlzJ4IfalN7rV6Qlc2u3M1iXDlAfCzx", 
     "COLORS": {"H": "#3b82f6", "D": "#94a3b8", "A": "#ef4444"}
 }
 
 st.set_page_config(page_title="Quantum Football Hybrid", page_icon="⚽", layout="wide")
 
 # -----------------------------------------------------------------------------
-# 2. DİL VE ARAYÜZ
+# 2. DIL VE CSS
 # -----------------------------------------------------------------------------
 TRANSLATIONS = {
     "tr": {
         "app_title": "QUANTUM FOOTBALL",
         "settings": "Ayarlar",
         "api_ph": "Football-Data API Key Giriniz",
-        "sim_param": "Simülasyon Ayarları",
-        "match_count": "Simülasyon Sayısı",
-        "form_set": "Takım Form Ayarları",
-        "start_btn": "ANALİZİ BAŞLAT",
-        "calculating": "Kuantum motoru verileri işliyor...",
+        "sim_param": "Simulasyon Ayarlari",
+        "match_count": "Simulasyon Sayisi",
+        "form_set": "Takim Form Ayarlari",
+        "start_btn": "ANALIZI BASLAT",
+        "calculating": "Kuantum motoru verileri isliyor...",
         "xg": "Beklenen Gol (xG)",
         "footer": "Quantum Football v90.0 Hybrid | SportMonks & Football-Data Integrated"
     },
@@ -74,17 +72,8 @@ st.markdown("""
 if 'sim_results' not in st.session_state: st.session_state.sim_results = None
 if 'match_info' not in st.session_state: st.session_state.match_info = None
 
-# Standart Takım Logoları (Mevcut Koddan)
-TEAM_LOGOS = {
-    2054: "https://upload.wikimedia.org/wikipedia/commons/f/f6/Galatasaray_Sports_Club_Logo.png",
-    2052: "https://upload.wikimedia.org/wikipedia/tr/8/86/Fenerbah%C3%A7e_SK.png",
-    2036: "https://upload.wikimedia.org/wikipedia/commons/2/20/Besiktas_jk.png",
-    2061: "https://upload.wikimedia.org/wikipedia/tr/a/ab/Trabzonspor_Amblemi.png",
-    # ... Diğer logolar aynı kalıyor ...
-}
-
 class StandardDataManager:
-    """Mevcut Kodun Veri Çekme Motoru (Standart Ligler)"""
+    """Mevcut Kodun Veri Cekme Motoru (Standart Ligler)"""
     def __init__(self, api_key):
         self.headers = {"X-Auth-Token": api_key}
 
@@ -105,12 +94,12 @@ class StandardDataManager:
         return standings_data, matches_data
 
 class ProDataManager:
-    """YENİ MOTOR: Sadece Danimarka ve İskoçya İçin"""
+    """YENI MOTOR: Sadece Danimarka ve Iskocya Icin"""
     def __init__(self):
         self.token = CONFIG["PRO_TOKEN"]
 
     def fetch_fixtures(self, league_id):
-        # Gelecek 14 gün
+        # Gelecek 14 gun
         start = datetime.now().strftime("%Y-%m-%d")
         end = (datetime.now() + timedelta(days=14)).strftime("%Y-%m-%d")
         url = f"{CONFIG['PRO_API_URL']}/fixtures/between/{start}/{end}"
@@ -120,7 +109,7 @@ class ProDataManager:
         except: return []
 
     def get_full_match_details(self, fixture_id):
-        # SENİN İSTEDİĞİN TÜM PRO ÖZELLİKLERİ ÇEKEN KISIM
+        # SENIN ISTEDIGIN TUM PRO OZELLIKLERI CEKEN KISIM
         includes = "participants;scores;lineups.player;weatherReport;pressure.participant;predictions.type;odds.market"
         url = f"{CONFIG['PRO_API_URL']}/fixtures/{fixture_id}"
         params = {"api_token": self.token, "include": includes}
@@ -129,28 +118,28 @@ class ProDataManager:
         except: return {}
 
 # -----------------------------------------------------------------------------
-# 4. GÖRSELLEŞTİRME (PRO ÖZELLİKLER İÇİN)
+# 4. GORSELLESTIRME (PRO OZELLIKLER ICIN)
 # -----------------------------------------------------------------------------
 def display_pro_features(match_data):
-    # 1. BASKI GRAFİĞİ (MOMENTUM)
+    # 1. BASKI GRAFIGI (MOMENTUM)
     pressure = match_data.get('pressure', [])
     if pressure:
         st.write("---")
-        st.subheader("⚡ Canlı Baskı Endeksi (Momentum)")
+        st.subheader("⚡ Canli Baski Endeksi (Momentum)")
         h_id = match_data['participants'][0]['id']
         recent = pressure[-20:] # Son 20 dakika
         minutes = [p.get('minute') for p in recent]
         vals = [p.get('pressure') if p['participant_id'] == h_id else -p.get('pressure') for p in recent]
         
         fig = go.Figure(go.Bar(x=minutes, y=vals, marker_color=['#3b82f6' if v>0 else '#ef4444' for v in vals]))
-        fig.update_layout(height=250, margin=dict(l=0,r=0,t=0,b=0), template="plotly_dark", yaxis_title="Baskı Gücü")
+        fig.update_layout(height=250, margin=dict(l=0,r=0,t=0,b=0), template="plotly_dark", yaxis_title="Baski Gucu")
         st.plotly_chart(fig, use_container_width=True)
 
     # 2. KADROLAR
     lineups = match_data.get('lineups', [])
     if lineups:
         st.write("---")
-        st.subheader("📋 Sahaya Dizilişler")
+        st.subheader("📋 Sahaya Dizilisler")
         c1, c2 = st.columns(2)
         for i, col in enumerate([c1, c2]):
             p_id = match_data['participants'][i]['id']
@@ -161,7 +150,7 @@ def display_pro_features(match_data):
                     st.markdown(f"▫️ {p.get('player', {}).get('display_name', 'Oyuncu')}")
 
 # -----------------------------------------------------------------------------
-# 5. SİMÜLASYON MOTORU (ORTAK)
+# 5. SIMULASYON MOTORU (ORTAK)
 # -----------------------------------------------------------------------------
 class SimulationEngine:
     def __init__(self):
@@ -216,7 +205,7 @@ def main():
         t = TRANSLATIONS[lang]
         st.divider()
         
-        # API Key Girişi (Sadece Standart Ligler İçin Lazım)
+        # API Key Girisi (Sadece Standart Ligler Icin Lazim)
         api_key = os.environ.get("FOOTBALL_API_KEY") or st.secrets.get("FOOTBALL_API_KEY")
         if not api_key:
             api_key = st.text_input(t['api_ph'], type="password")
@@ -224,8 +213,8 @@ def main():
         st.header(f"🧪 {t['settings']}")
         sim_count = st.select_slider(t['match_count'], [10000, 50000, 100000], 50000)
         st.caption(t['form_set'])
-        h_att = st.slider("Ev Gücü", 80, 120, 100)/100
-        a_att = st.slider("Dep Gücü", 80, 120, 100)/100
+        h_att = st.slider("Ev Gucu", 80, 120, 100)/100
+        a_att = st.slider("Dep Gucu", 80, 120, 100)/100
         
         c1, c2 = st.columns(2)
         h_miss = c1.number_input("Ev Eksik", 0, 5, 0)
@@ -233,32 +222,32 @@ def main():
 
     st.markdown(f"<div class='main-title'>{t['app_title']}</div>", unsafe_allow_html=True)
 
-    # --- HİBRİT LİG LİSTESİ ---
-    # Pro ligleri sayı (ID), standart ligleri metin (Code) olarak tanımladım.
+    # --- HIBRIT LIG LISTESI ---
+    # Pro ligleri sayi (ID), standart ligleri metin (Code) olarak tanimladim.
     L_MAP = {
         "🇩🇰 Danimarka Superliga (PRO)": 271, 
-        "🏴󠁧󠁢󠁳󠁣󠁴󠁿 İskoçya Premiership (PRO)": 501,
-        "🇹🇷 Süper Lig": "TR1", 
+        "🏴󠁧󠁢󠁳󠁣󠁴󠁿 Iskocya Premiership (PRO)": 501,
+        "🇹🇷 Super Lig": "TR1", 
         "🇬🇧 Premier League": "PL", 
         "🇪🇸 La Liga": "PD",
         "🇩🇪 Bundesliga": "BL1", 
         "🇮🇹 Serie A": "SA", 
         "🇫🇷 Ligue 1": "FL1", 
         "🇳🇱 Eredivisie": "DED", 
-        "🇪🇺 Şampiyonlar Ligi": "CL"
+        "🇪🇺 Sampiyonlar Ligi": "CL"
     }
 
     col1, col2 = st.columns([1, 2])
     with col1: league_sel = st.selectbox(t['league'], list(L_MAP.keys()))
     
     league_val = L_MAP[league_sel]
-    is_pro_mode = isinstance(league_val, int) # Sayıysa PRO modunu aç
+    is_pro_mode = isinstance(league_val, int) # Sayiysa PRO modunu ac
 
     matches = {}
-    teams_data = {} # Standart mod için takım güçleri
+    teams_data = {} # Standart mod icin takim gucleri
     avg_goals = 2.5
 
-    # --- VERİ ÇEKME MANTIĞI ---
+    # --- VERI CEKME MANTIGI ---
     if is_pro_mode:
         # PRO MOD: SportMonks
         pm = ProDataManager()
@@ -267,19 +256,19 @@ def main():
         
         for f in fixtures:
             label = f"{f['participants'][0]['name']} vs {f['participants'][1]['name']} ({f['starting_at'][:10]})"
-            matches[label] = f # Tüm maç objesini sakla
+            matches[label] = f # Tum mac objesini sakla
             
-        st.success("✨ PRO MOD AKTİF: Bu lig için detaylı SportMonks verileri kullanılıyor.")
+        st.success("✨ PRO MOD AKTIF: Bu lig icin detayli SportMonks verileri kullaniliyor.")
         
     else:
         # STANDART MOD: Football-Data
-        if not api_key: st.warning("Bu ligler için API Key giriniz."); st.stop()
+        if not api_key: st.warning("Bu ligler icin API Key giriniz."); st.stop()
         sm = StandardDataManager(api_key)
         standings, fixtures = sm.fetch_data(league_val)
         
         if not fixtures or not fixtures.get('matches'): st.warning(t['no_match']); st.stop()
         
-        # Güç verilerini hazırla
+        # Guc verilerini hazirla
         if standings and "standings" in standings:
             tbl = standings["standings"][0].get("table", [])
             if tbl:
@@ -297,16 +286,16 @@ def main():
     if st.button(t['start_btn'], use_container_width=True):
         m_data = matches[sel_match]
         
-        # Değişkenleri Hazırla
-        h_val, a_val = 1.5, 1.2 # Varsayılan
+        # Degiskenleri Hazirla
+        h_val, a_val = 1.5, 1.2 # Varsayilan
         h_name, a_name = "Ev", "Dep"
         h_img, a_img = CONFIG["DEFAULT_LOGO"], CONFIG["DEFAULT_LOGO"]
         weather_bad = False
         full_pro_data = None
 
         if is_pro_mode:
-            # PRO Veri İşleme
-            with st.spinner("SportMonks Pro verileri (Hava durumu, Kadrolar, Baskı) çekiliyor..."):
+            # PRO Veri Isleme
+            with st.spinner("SportMonks Pro verileri (Hava durumu, Kadrolar, Baski) cekiliyor..."):
                 full_pro_data = pm.get_match_details(m_data['id'])
                 h_part = full_pro_data['participants'][0]
                 a_part = full_pro_data['participants'][1]
@@ -314,15 +303,15 @@ def main():
                 h_name, a_name = h_part['name'], a_part['name']
                 h_img, a_img = h_part['image_path'], a_part['image_path']
                 
-                # Hava Durumu Kontrolü
+                # Hava Durumu Kontrolu
                 w = full_pro_data.get('weather_report')
                 if w and ('rain' in w.get('type','').lower() or 'snow' in w.get('type','').lower()):
                     weather_bad = True
                 
-                # Pro modda puan tablosu olmadığı için varsayılan güç + kullanıcı ayarı kullanılır
+                # Pro modda puan tablosu olmadigi icin varsayilan guc + kullanici ayari kullanilir
                 h_val, a_val = 1.6, 1.2 
         else:
-            # Standart Veri İşleme
+            # Standart Veri Isleme
             h_id, a_id = m_data['homeTeam']['id'], m_data['awayTeam']['id']
             h_info = teams_data.get(h_id, {})
             a_info = teams_data.get(a_id, {})
@@ -334,15 +323,15 @@ def main():
             h_val = h_info.get('gf', 1.5)
             a_val = a_info.get('gf', 1.2)
 
-        # Simülasyonu Çalıştır
+        # Simulasyonu Calistir
         eng = SimulationEngine()
-        # Eksik oyuncu cezası
+        # Eksik oyuncu cezasi
         h_val *= (1 - h_miss * 0.12)
         a_val *= (1 - a_miss * 0.12)
         
         res = eng.run(h_val, a_val, avg_goals, {'count': sim_count, 'h_att': h_att, 'a_att': a_att, 'adv': 1.15, 'weather_bad': weather_bad})
 
-        # --- SONUÇ EKRANI ---
+        # --- SONUC EKRANI ---
         c1, c2, c3 = st.columns([2,1,2])
         with c1: st.markdown(f"<div style='text-align:center'><img src='{h_img}' width='80'><br><h3>{h_name}</h3></div>", unsafe_allow_html=True)
         with c2: 
@@ -356,14 +345,14 @@ def main():
         k2.markdown(f"<div class='stat-card'><div class='stat-lbl'>{t['draw']}</div><div class='stat-val' style='color:#94a3b8'>%{res['p'][1]:.1f}</div></div>", unsafe_allow_html=True)
         k3.markdown(f"<div class='stat-card'><div class='stat-lbl'>{t['away']}</div><div class='stat-val' style='color:#ef4444'>%{res['p'][2]:.1f}</div></div>", unsafe_allow_html=True)
 
-        # --- PRO ÖZELLİKLERİ GÖSTER (Sadece Pro Modda) ---
+        # --- PRO OZELLIKLERI GOSTER (Sadece Pro Modda) ---
         if is_pro_mode and full_pro_data:
             # Hava Durumu Bilgisi
             if full_pro_data.get('weather_report'):
                 w = full_pro_data['weather_report']
-                st.info(f"🌤️ Hava Durumu: {w.get('temp')}°C, {w.get('type')} (Simülasyona Etkisi: {'Var' if weather_bad else 'Yok'})")
+                st.info(f"🌤️ Hava Durumu: {w.get('temp')}°C, {w.get('type')} (Simulasyona Etkisi: {'Var' if weather_bad else 'Yok'})")
             
-            # Fonksiyonları çağır
+            # Fonksiyonlari cagir
             display_pro_features(full_pro_data)
             
             # AI Tahmini
@@ -374,7 +363,7 @@ def main():
                 for p in preds[:1]:
                     st.success(f"{p['type']['name']}: {p['predictions']}")
 
-        # --- ORTAK GÖRSELLER ---
+        # --- ORTAK GORSELLER ---
         st.write("")
         c_heat, c_list = st.columns([2, 1])
         with c_heat:
