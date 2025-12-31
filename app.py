@@ -7,20 +7,43 @@ import plotly.express as px
 from datetime import datetime, timedelta
 import time
 import os
+import csv
 
 # -----------------------------------------------------------------------------
-# 1. KONFİGÜRASYON
+# 1. KONFİGÜRASYON & ADMİN AYARLARI
 # -----------------------------------------------------------------------------
 CONFIG = {
     "DEFAULT_LOGO": "https://cdn-icons-png.flaticon.com/512/53/53283.png",
     "API_URL": "https://api.football-data.org/v4",
-    "COLORS": {"H": "#3b82f6", "D": "#94a3b8", "A": "#ef4444"}
+    "COLORS": {"H": "#3b82f6", "D": "#94a3b8", "A": "#ef4444"},
+    "ADMIN_PASS": "muratLola26",  # Admin Şifresi
+    "LOG_FILE": "user_activity.csv" # Kayıt dosyası
 }
 
 st.set_page_config(page_title="Quantum Football", page_icon="⚽", layout="wide")
 
 # -----------------------------------------------------------------------------
-# 2. DİL VE ARAYÜZ METİNLERİ
+# 2. LOGLAMA FONKSİYONU (YENİ)
+# -----------------------------------------------------------------------------
+def log_activity(league, match, h_form, a_form):
+    """Kullanıcı butona bastığında verileri CSV dosyasına kaydeder"""
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    new_data = [timestamp, league, match, h_form, a_form]
+    
+    # Dosya yoksa oluştur, varsa ekle
+    file_exists = os.path.isfile(CONFIG["LOG_FILE"])
+    
+    try:
+        with open(CONFIG["LOG_FILE"], mode='a', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            if not file_exists:
+                writer.writerow(["Tarih", "Lig", "Maç", "Ev Formu", "Dep Formu"]) # Başlıklar
+            writer.writerow(new_data)
+    except Exception as e:
+        pass # Loglama hatası uygulamayı durdurmasın
+
+# -----------------------------------------------------------------------------
+# 3. DİL VE ARAYÜZ METİNLERİ
 # -----------------------------------------------------------------------------
 TRANSLATIONS = {
     "tr": {
@@ -46,7 +69,7 @@ TRANSLATIONS = {
         "ht_ft": "İY/MS (HT/FT) Dağılımı",
         "total_goal": "Toplam Gol Beklentisi",
         "no_match": "Bu ligde/turnuvada yakında planlanmış maç bulunamadı.",
-        "footer": "Quantum Football v53.0 © 2026 | Model: Monte Carlo & Poisson Dağılımı | Uyarı: Bu yazılım sadece istatistiksel ve bilimsel analiz amaçlıdır. Yatırım tavsiyesi değildir."
+        "footer": "Quantum Football v96.0 © 2026 | Admin & Analytics Edition"
     },
     "en": {
         "app_title": "QUANTUM FOOTBALL",
@@ -71,12 +94,12 @@ TRANSLATIONS = {
         "ht_ft": "HT/FT Distribution",
         "total_goal": "Total Goal Expectancy",
         "no_match": "No upcoming matches found in this league/tournament.",
-        "footer": "Quantum Football v53.0 © 2026 | Model: Monte Carlo & Poisson Distribution | Disclaimer: This tool is for statistical analysis only. Not financial advice."
+        "footer": "Quantum Football v96.0 © 2026 | Admin & Analytics Edition"
     }
 }
 
 # -----------------------------------------------------------------------------
-# 3. CSS STİLİ
+# 4. CSS STİLİ
 # -----------------------------------------------------------------------------
 st.markdown("""
     <style>
@@ -125,7 +148,7 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 4. DATA MANAGER
+# 5. DATA MANAGER
 # -----------------------------------------------------------------------------
 if 'sim_results' not in st.session_state: st.session_state.sim_results = None
 if 'match_info' not in st.session_state: st.session_state.match_info = None
@@ -168,7 +191,6 @@ class DataManager:
         matches_data = {"matches": []}
         
         try:
-            # Standings her turnuvada olmayabilir (örn. kupa) o yüzden try-except
             r1 = requests.get(f"{CONFIG['API_URL']}/competitions/{league_code}/standings", headers=_self.headers)
             if r1.status_code == 200:
                 standings_data = r1.json()
@@ -176,7 +198,6 @@ class DataManager:
             today = datetime.now().strftime("%Y-%m-%d")
             future = (datetime.now() + timedelta(days=90)).strftime("%Y-%m-%d")
             
-            # Fikstür Çekme
             r2 = requests.get(f"{CONFIG['API_URL']}/competitions/{league_code}/matches", 
                               headers=_self.headers, params={"dateFrom": today, "dateTo": future})
             if r2.status_code == 200:
@@ -208,7 +229,6 @@ class DataManager:
                 matches_data['matches'] = []
             matches_data['matches'].extend(manual_matches)
         
-        # Boş veri kontrolü
         t_check = standings_data.get("standings", [])
         m_check = matches_data.get("matches", [])
         
@@ -218,7 +238,7 @@ class DataManager:
         return standings_data, matches_data
 
 # -----------------------------------------------------------------------------
-# 5. SIMULATION ENGINE
+# 6. SIMULATION ENGINE
 # -----------------------------------------------------------------------------
 class SimulationEngine:
     def __init__(self):
@@ -300,7 +320,7 @@ class SimulationEngine:
         }
 
 # -----------------------------------------------------------------------------
-# 6. APP MAIN LOGIC
+# 7. APP MAIN LOGIC
 # -----------------------------------------------------------------------------
 def main():
     # --- ÜST BAR ---
@@ -348,6 +368,23 @@ def main():
             "home_adv": 1.15
         }
         
+        # --- ADMIN PANELI (YENİ) ---
+        st.divider()
+        with st.expander("🔐 Admin Paneli"):
+            admin_pw = st.text_input("Şifre", type="password")
+            if admin_pw == CONFIG["ADMIN_PASS"]:
+                st.success("Giriş Başarılı!")
+                if os.path.exists(CONFIG["LOG_FILE"]):
+                    df_log = pd.read_csv(CONFIG["LOG_FILE"])
+                    st.dataframe(df_log)
+                    if st.button("Logları Temizle"):
+                        os.remove(CONFIG["LOG_FILE"])
+                        st.rerun()
+                else:
+                    st.info("Henüz kayıtlı analiz yok.")
+            elif admin_pw:
+                st.error("Hatalı Şifre!")
+
         # BUY ME A COFFEE BUTONU
         st.divider()
         st.markdown(
@@ -391,7 +428,7 @@ def main():
         st.info(t['no_match'])
         st.stop()
     
-    # Puan Durumu İşleme (Varsa)
+    # Puan Durumu İşleme
     table = []
     if standings and "standings" in standings:
         standings_list = standings.get("standings", [])
@@ -413,7 +450,7 @@ def main():
                 "gf": row["goalsFor"]/row["playedGames"], "ga": row["goalsAgainst"]/row["playedGames"]
             }
     else:
-        avg_league = 2.5 # Turnuvalar için varsayılan ortalama
+        avg_league = 2.5 
 
     # Maçları Listele
     matches = {}
@@ -429,16 +466,18 @@ def main():
 
     if st.button(f"{t['start_btn']} ({sim_count//1000}K)", use_container_width=True):
         m = matches[sel_match]
+        
+        # --- LOGLAMA BURADA YAPILIYOR ---
+        log_activity(league, sel_match, f"{h_att:.1f}", f"{a_att:.1f}")
+        
         h_id, a_id = m["homeTeam"]["id"], m["awayTeam"]["id"]
         
-        # LOGO ZORLAMASI (Maç objesinden almaya öncelik veriyoruz)
         h_crest = m["homeTeam"].get("crest") or teams.get(h_id, {}).get("crest") or TEAM_LOGOS.get(h_id, CONFIG["DEFAULT_LOGO"])
         a_crest = m["awayTeam"].get("crest") or teams.get(a_id, {}).get("crest") or TEAM_LOGOS.get(a_id, CONFIG["DEFAULT_LOGO"])
 
         h_team = teams.get(h_id, {"name": m["homeTeam"]["name"], "crest": h_crest, "gf": 1.5, "ga": 1.2})
         a_team = teams.get(a_id, {"name": m["awayTeam"]["name"], "crest": a_crest, "gf": 1.4, "ga": 1.3})
         
-        # GÜÇ ENJEKSİYONU (Manuel Statlar - Sadece TR için örnek)
         MANUAL_STATS = {
             2054: {"gf": 2.50, "ga": 0.80}, # Galatasaray
             2052: {"gf": 2.55, "ga": 0.85}, # Fenerbahçe
@@ -453,7 +492,6 @@ def main():
         eng = SimulationEngine()
         with st.spinner(t['calculating']):
             current_params = params.copy()
-            # Tarafsız saha kontrolü (Kupa finalleri vb.)
             comp_name = m.get("competition", {}).get("name", "")
             if "Kupa" in comp_name or "Cup" in comp_name or "Champions" in comp_name:
                 current_params["home_adv"] = 1.08 
@@ -538,4 +576,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
