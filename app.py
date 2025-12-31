@@ -17,7 +17,7 @@ CONFIG = {
     "PRO_API_URL": "https://api.sportmonks.com/v3/football",
     "PRO_TOKEN": "GL0xxZHLVkzEUypMQdNkKow4NI0FPrlzJ4IfalN7rV6Qlc2u3M1iXDlAfCzx", 
     "COLORS": {"H": "#3b82f6", "D": "#94a3b8", "A": "#ef4444"},
-    "ADMIN_PASS": "muratLola26", # SENIN YENI SIFREN
+    "ADMIN_PASS": "muratLola26", 
     "LOG_FILE": "user_activity_logs.csv"
 }
 
@@ -26,17 +26,13 @@ st.set_page_config(page_title="Quantum Football Hybrid", page_icon="⚽", layout
 # -----------------------------------------------------------------------------
 # 2. KULLANICI TAKIP SISTEMI (LOGGING)
 # -----------------------------------------------------------------------------
-# URL'den HTML tarafindan gonderilen emaili yakala
 query_params = st.query_params
 current_user_email = query_params.get("user_email", "Anonim_Ziyaretci")
 
 def log_activity(league, match):
     """Kimin hangi maca baktigini kaydeder"""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    
-    # Eger kullanici bir liste icinde gelirse (bazen olur), ilkini al
     user = current_user_email[0] if isinstance(current_user_email, list) else current_user_email
-    
     new_data = [timestamp, user, league, match]
     
     file_exists = os.path.isfile(CONFIG["LOG_FILE"])
@@ -44,12 +40,12 @@ def log_activity(league, match):
         with open(CONFIG["LOG_FILE"], mode='a', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
             if not file_exists:
-                writer.writerow(["Zaman", "Kullanici (Email)", "Lig", "Mac"]) # Basliklar
+                writer.writerow(["Zaman", "Kullanici", "Lig", "Mac"]) 
             writer.writerow(new_data)
     except: pass
 
 # -----------------------------------------------------------------------------
-# 3. DIL VE ARAYUZ
+# 3. DIL VE ARAYUZ (EKSİK ANAHTARLAR EKLENDİ)
 # -----------------------------------------------------------------------------
 TRANSLATIONS = {
     "tr": {
@@ -60,7 +56,14 @@ TRANSLATIONS = {
         "match_count": "Simulasyon Sayisi",
         "start_btn": "ANALIZI BASLAT",
         "xg": "Beklenen Gol (xG)",
-        "footer": f"Quantum Football v99.0 | Giris Yapan: {current_user_email}"
+        "league": "Lig Seçimi",       # EKLENDİ
+        "match": "Maç Seçimi",        # EKLENDİ
+        "form_set": "Takım Formu",    # EKLENDİ
+        "home": "EV SAHİBİ",          # EKLENDİ
+        "draw": "BERABERLİK",         # EKLENDİ
+        "away": "DEPLASMAN",          # EKLENDİ
+        "no_match": "Maç bulunamadı.",# EKLENDİ
+        "footer": f"Quantum Football v99.1 | User: {current_user_email}"
     },
     "en": {
         "app_title": "QUANTUM FOOTBALL",
@@ -70,7 +73,14 @@ TRANSLATIONS = {
         "match_count": "Simulation Count",
         "start_btn": "START ANALYSIS",
         "xg": "Expected Goals (xG)",
-        "footer": f"Quantum Football v99.0 | User: {current_user_email}"
+        "league": "Select League",    # EKLENDİ
+        "match": "Select Match",      # EKLENDİ
+        "form_set": "Team Form",      # EKLENDİ
+        "home": "HOME WIN",           # EKLENDİ
+        "draw": "DRAW",               # EKLENDİ
+        "away": "AWAY WIN",           # EKLENDİ
+        "no_match": "No match found.",# EKLENDİ
+        "footer": f"Quantum Football v99.1 | User: {current_user_email}"
     }
 }
 
@@ -99,7 +109,6 @@ TEAM_LOGOS = {
     2052: "https://upload.wikimedia.org/wikipedia/tr/8/86/Fenerbah%C3%A7e_SK.png",
     2036: "https://upload.wikimedia.org/wikipedia/commons/2/20/Besiktas_jk.png",
     2061: "https://upload.wikimedia.org/wikipedia/tr/a/ab/Trabzonspor_Amblemi.png",
-    # ... Digerleri ayni
 }
 
 class StandardDataManager:
@@ -212,6 +221,7 @@ def main():
         
         st.header(t['settings'])
         sim_count = st.select_slider(t['match_count'], [10000, 50000, 100000], 50000)
+        st.caption(t['form_set'])
         h_att = st.slider("Ev Gucu", 80, 120, 100)/100
         a_att = st.slider("Dep Gucu", 80, 120, 100)/100
         c1, c2 = st.columns(2)
@@ -236,8 +246,11 @@ def main():
             elif admin_pw: st.error("Hatali Sifre")
 
     st.markdown(f"<div class='main-title'>{t['app_title']}</div>", unsafe_allow_html=True)
+    
+    # Kullanıcı emailini göster (V99 Özelliği)
     if current_user_email and current_user_email != "Anonim_Ziyaretci":
-        st.caption(f"👤 Hosgeldin, **{current_user_email}**")
+        user_display = current_user_email[0] if isinstance(current_user_email, list) else current_user_email
+        st.caption(f"👤 Giris Yapan: **{user_display}**")
 
     L_MAP = {
         "Danimarka Superliga (PRO)": 271, "Iskocya Premiership (PRO)": 501,
@@ -311,9 +324,9 @@ def main():
 
         st.divider()
         k1, k2, k3 = st.columns(3)
-        k1.markdown(f"<div class='stat-card'>EV SAHIBI<br><span class='stat-val'>%{res['p'][0]:.1f}</span></div>", unsafe_allow_html=True)
-        k2.markdown(f"<div class='stat-card'>BERABERLIK<br><span class='stat-val'>%{res['p'][1]:.1f}</span></div>", unsafe_allow_html=True)
-        k3.markdown(f"<div class='stat-card'>DEPLASMAN<br><span class='stat-val'>%{res['p'][2]:.1f}</span></div>", unsafe_allow_html=True)
+        k1.markdown(f"<div class='stat-card'>{t['home']}<br><span class='stat-val'>%{res['p'][0]:.1f}</span></div>", unsafe_allow_html=True)
+        k2.markdown(f"<div class='stat-card'>{t['draw']}<br><span class='stat-val'>%{res['p'][1]:.1f}</span></div>", unsafe_allow_html=True)
+        k3.markdown(f"<div class='stat-card'>{t['away']}<br><span class='stat-val'>%{res['p'][2]:.1f}</span></div>", unsafe_allow_html=True)
 
         if is_pro_mode and full_pro_data:
             if full_pro_data.get('weather_report'): st.info(f"🌤️ Hava: {full_pro_data['weather_report'].get('temp')}C")
@@ -332,7 +345,7 @@ def main():
             st.plotly_chart(fig_heat, use_container_width=True)
             
         with c_list:
-            st.write("### 🎯 En Olasi Skorlar")
+            st.write("### 🎯 En Olası Skorlar")
             with st.container():
                 for score, prob in res["top"]:
                     st.markdown(f"<div class='score-row'><span style='font-weight:bold; font-size:1.2rem'>{score}</span><span style='color:#38bdf8; font-weight:bold'>%{prob:.1f}</span></div>", unsafe_allow_html=True)
