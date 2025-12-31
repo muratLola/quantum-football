@@ -21,7 +21,7 @@ CONFIG = {
     "LOG_FILE": "user_activity_logs.csv"
 }
 
-st.set_page_config(page_title="Quantum Football Hybrid", page_icon="⚽", layout="wide")
+st.set_page_config(page_title="Quantum Football Hybrid", page_icon="soccer", layout="wide")
 
 # -----------------------------------------------------------------------------
 # 2. KULLANICI TAKIP SISTEMI (LOGGING)
@@ -56,14 +56,18 @@ TRANSLATIONS = {
         "match_count": "Simulasyon Sayisi",
         "start_btn": "ANALIZI BASLAT",
         "xg": "Beklenen Gol (xG)",
-        "league": "Lig Seçimi",       # EKLENDİ
-        "match": "Maç Seçimi",        # EKLENDİ
-        "form_set": "Takım Formu",    # EKLENDİ
-        "home": "EV SAHİBİ",          # EKLENDİ
-        "draw": "BERABERLİK",         # EKLENDİ
+        "league": "Lig Secimi",       # EKLENDİ
+        "match": "Mac Secimi",        # EKLENDİ
+        "form_set": "Takim Formu",    # EKLENDİ
+        "home": "EV SAHIBI",          # EKLENDİ
+        "draw": "BERABERLIK",         # EKLENDİ
         "away": "DEPLASMAN",          # EKLENDİ
-        "no_match": "Maç bulunamadı.",# EKLENDİ
-        "footer": f"Quantum Football v99.1 | User: {current_user_email}"
+        "no_match": "Mac bulunamadi.",# EKLENDİ
+        "top_scores": "En Olasi Skorlar",
+        "heatmap": "Skor Matrisi",
+        "ht_ft": "IY/MS Tahmini",
+        "total_goal": "Toplam Gol",
+        "footer": f"Quantum Football v99.2 | User: {current_user_email}"
     },
     "en": {
         "app_title": "QUANTUM FOOTBALL",
@@ -73,14 +77,18 @@ TRANSLATIONS = {
         "match_count": "Simulation Count",
         "start_btn": "START ANALYSIS",
         "xg": "Expected Goals (xG)",
-        "league": "Select League",    # EKLENDİ
-        "match": "Select Match",      # EKLENDİ
-        "form_set": "Team Form",      # EKLENDİ
-        "home": "HOME WIN",           # EKLENDİ
-        "draw": "DRAW",               # EKLENDİ
-        "away": "AWAY WIN",           # EKLENDİ
-        "no_match": "No match found.",# EKLENDİ
-        "footer": f"Quantum Football v99.1 | User: {current_user_email}"
+        "league": "Select League",    
+        "match": "Select Match",      
+        "form_set": "Team Form",      
+        "home": "HOME WIN",           
+        "draw": "DRAW",               
+        "away": "AWAY WIN",           
+        "no_match": "No match found.",
+        "top_scores": "Most Likely Scores",
+        "heatmap": "Score Matrix",
+        "ht_ft": "HT/FT Prediction",
+        "total_goal": "Total Goals",
+        "footer": f"Quantum Football v99.2 | User: {current_user_email}"
     }
 }
 
@@ -247,7 +255,6 @@ def main():
 
     st.markdown(f"<div class='main-title'>{t['app_title']}</div>", unsafe_allow_html=True)
     
-    # Kullanıcı emailini göster (V99 Özelliği)
     if current_user_email and current_user_email != "Anonim_Ziyaretci":
         user_display = current_user_email[0] if isinstance(current_user_email, list) else current_user_email
         st.caption(f"👤 Giris Yapan: **{user_display}**")
@@ -288,7 +295,6 @@ def main():
     with c2: sel_match = st.selectbox(t['match'], list(matches.keys()))
 
     if st.button(t['start_btn'], use_container_width=True):
-        # --- LOGLAMA TETIKLENIR ---
         log_activity(league_sel, sel_match)
         
         m_data = matches[sel_match]
@@ -339,26 +345,26 @@ def main():
         st.write("")
         c_heat, c_list = st.columns([2, 1])
         with c_heat:
-            st.write("### 🔥 Skor Matrisi")
+            st.write(f"### 🔥 {t['heatmap']}")
             fig_heat = go.Figure(data=go.Heatmap(z=res["matrix"], x=[0,1,2,3,4,5], y=[0,1,2,3,4,5], colorscale='Magma', texttemplate="%{z:.1f}%"))
             fig_heat.update_layout(xaxis_title="Deplasman", yaxis_title="Ev Sahibi", height=400, margin=dict(l=0,r=0,t=0,b=0), paper_bgcolor='rgba(0,0,0,0)', font_color='white')
             st.plotly_chart(fig_heat, use_container_width=True)
             
         with c_list:
-            st.write("### 🎯 En Olası Skorlar")
+            st.write(f"### 🎯 {t['top_scores']}")
             with st.container():
                 for score, prob in res["top"]:
                     st.markdown(f"<div class='score-row'><span style='font-weight:bold; font-size:1.2rem'>{score}</span><span style='color:#38bdf8; font-weight:bold'>%{prob:.1f}</span></div>", unsafe_allow_html=True)
 
         c_ht, c_goal = st.columns(2)
         with c_ht:
-            st.write("### ⏱️ IY/MS Tahmini")
+            st.write(f"### ⏱️ {t['ht_ft']}")
             htft_df = pd.DataFrame(res['htft'], columns=['Sonuc', 'Olasilik'])
             fig_bar = px.bar(htft_df, x='Sonuc', y='Olasilik', text_auto='.1f', color='Olasilik', color_continuous_scale='Viridis')
             fig_bar.update_layout(height=300, paper_bgcolor='rgba(0,0,0,0)', font_color='white')
             st.plotly_chart(fig_bar, use_container_width=True)
         with c_goal:
-            st.write("### 🥅 Toplam Gol")
+            st.write(f"### 🥅 {t['total_goal']}")
             fig_pie = go.Figure(data=[go.Pie(labels=list(res["gb"].keys()), values=list(res["gb"].values()), hole=.4, marker=dict(colors=['#94a3b8', '#3b82f6', '#8b5cf6', '#f43f5e']))])
             fig_pie.update_layout(height=300, margin=dict(t=0,b=0,l=0,r=0), paper_bgcolor='rgba(0,0,0,0)', font_color='white')
             st.plotly_chart(fig_pie, use_container_width=True)
