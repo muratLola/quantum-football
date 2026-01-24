@@ -21,7 +21,7 @@ CONFIG = {
     # API Key ve Admin Şifresi secrets.toml üzerinden çekilecek
 }
 
-# Takım Logoları
+# Takım Logoları (Görsellik İçin)
 TEAM_LOGOS = {
     2054: "https://upload.wikimedia.org/wikipedia/commons/f/f6/Galatasaray_Sports_Club_Logo.png",
     2052: "https://upload.wikimedia.org/wikipedia/tr/8/86/Fenerbah%C3%A7e_SK.png",
@@ -196,7 +196,7 @@ class SimulationEngine:
         }
 
 # -----------------------------------------------------------------------------
-# 5. DATA MANAGER (API & CACHE)
+# 5. DATA MANAGER
 # -----------------------------------------------------------------------------
 class DataManager:
     def __init__(self, api_key):
@@ -204,24 +204,31 @@ class DataManager:
 
     @st.cache_data(ttl=1800)
     def fetch_data(_self, league_code):
+        standings_data = {"standings": [{"table": []}]}
+        matches_data = {"matches": []}
+        
         try:
+            # 1. Puan Durumu Çek
             r1 = requests.get(f"{CONFIG['API_URL']}/competitions/{league_code}/standings", headers=_self.headers)
-            if r1.status_code == 429:
-                st.warning("⚠️ API Limiti: Lütfen 30 saniye bekleyin.")
-                return None, None
+            if r1.status_code == 200:
+                standings_data = r1.json()
+            elif r1.status_code == 429:
+                st.warning("⚠️ API Limiti: Lütfen biraz bekleyin.")
             
-            standings = r1.json()
-            
+            # 2. Fikstür Çek
             today = datetime.now().strftime("%Y-%m-%d")
-            future = (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")
+            future = (datetime.now() + timedelta(days=90)).strftime("%Y-%m-%d")
+            
             r2 = requests.get(f"{CONFIG['API_URL']}/competitions/{league_code}/matches", 
                               headers=_self.headers, params={"dateFrom": today, "dateTo": future})
-            matches = r2.json() if r2.status_code == 200 else {}
-            
-            return standings, matches
-        except Exception as e:
-            print(f"Data Fetch Error: {e}")
-            return None, None
+            if r2.status_code == 200:
+                matches_data = r2.json()
+        except:
+            pass
+        
+        # Manuel Süper Kupa Kısmı SİLİNDİ
+        
+        return standings_data, matches_data
 
     def get_team_stats(self, standings, team_id, table_type='TOTAL', default_name="Takım"):
         try:
@@ -229,18 +236,19 @@ class DataManager:
             s_list = standings.get('standings', [])
             if not s_list: return {"name": default_name, "id": team_id, "gf": 1.4, "ga": 1.4}
 
+            # İstenen tabloyu bul (TOTAL, HOME, AWAY)
             for item in s_list:
                 if item.get('type') == table_type:
                     target_table = item.get('table', [])
                     break
             
+            # Bulamazsa TOTAL'e dön
             if not target_table and table_type != 'TOTAL':
                 return self.get_team_stats(standings, team_id, 'TOTAL', default_name)
 
             for row in target_table:
                 if row['team']['id'] == team_id:
                     played = row['playedGames']
-                    # Sezon başı koruması
                     if played < 2: 
                         return {"name": row['team']['name'], "id": team_id, "gf": 1.5, "ga": 1.5}
                     
@@ -250,8 +258,7 @@ class DataManager:
                         "gf": row['goalsFor'] / played,
                         "ga": row['goalsAgainst'] / played
                     }
-        except Exception as e:
-            print(f"Stats Parse Error: {e}")
+        except:
             pass
         return {"name": default_name, "id": team_id, "gf": 1.4, "ga": 1.4}
 
@@ -298,7 +305,6 @@ def main():
         max_sim = 250000 if not IS_GUEST else 5000
         default_sim = 50000 if not IS_GUEST else 1000
         sim_count = st.slider("Simülasyon Sayısı", 1000, max_sim, default_sim, step=1000)
-        if sim_count > 100000: st.caption("⚠️ İşlem süresi uzayabilir.")
         
         st.caption("Takım Form Çarpanları")
         h_att = st.slider("Ev Sahibi", 0.8, 1.2, 1.0)
@@ -329,22 +335,48 @@ def main():
 
     dm = DataManager(api_key)
     
+    # --- LİG LİSTESİ ---
+    L_MAP = {
+        "Süper Lig (Türkiye)": "TR1",
+        "Premier League (İngiltere)": "PL", 
+        "Championship (İngiltere Alt)": "ELC", 
+        "La Liga (İspanya)": "PD", 
+        "Bundesliga (Almanya)": "BL1", 
+        "Serie A (İtalya)": "SA",
+        "Ligue 1 (Fransa)": "FL1", 
+        "Eredivisie (Hollanda)": "DED",
+        "Primeira Liga (Portekiz)": "PPL",
+        "Série A (Brezilya)": "BSA",
+        "UEFA Şampiyonlar Ligi": "CL",
+        "FIFA Dünya Kupası": "WC",
+        "Avrupa Şampiyonası": "EC"
+    }
+    
     c1, c2 = st.columns([1, 2])
     with c1:
-        leagues = {"Süper Lig": "TR1", "Premier League": "PL", "La Liga": "PD", "Bundesliga": "BL1", "Serie A": "SA", "Şampiyonlar Ligi": "CL"}
-        sel_league = st.selectbox("Lig Seçiniz", list(leagues.keys()))
+        sel_league_name = st.selectbox("Lig Seçiniz", list(L_MAP.keys()))
+        sel_league_code = L_MAP[sel_league_name]
     
-    standings, fixtures = dm.fetch_data(leagues[sel_league])
-    if not fixtures: st.stop()
+    standings, fixtures = dm.fetch_data(sel_league_code)
+    
+    if not fixtures or "matches" not in fixtures:
+        st.info("Bu ligde planlanmış maç bulunamadı.")
+        st.stop()
         
-    matches = {f"{m['homeTeam']['name']} vs {m['awayTeam']['name']}": m for m in fixtures['matches'] if m['status'] == 'SCHEDULED'}
-    if not matches: st.warning("Planlanmış maç yok."); st.stop()
+    # Maçları Listele
+    matches = {}
+    for m in fixtures.get("matches", []):
+        if m["status"] in ["SCHEDULED", "TIMED"]:
+            match_label = f"{m['homeTeam']['name']} vs {m['awayTeam']['name']} ({m['utcDate'][:10]})"
+            matches[match_label] = m
+    
+    if not matches: st.warning("Yakın tarihte oynanacak maç yok."); st.stop()
 
     with c2: sel_match_name = st.selectbox("Maç Seçiniz", list(matches.keys()))
     
     if st.button("🚀 ANALİZİ BAŞLAT", use_container_width=True):
         m = matches[sel_match_name]
-        log_activity(sel_league, sel_match_name, h_att, a_att, sim_count)
+        log_activity(sel_league_name, sel_match_name, h_att, a_att, sim_count)
         
         h_id, a_id = m['homeTeam']['id'], m['awayTeam']['id']
         
@@ -375,7 +407,6 @@ def main():
         st.divider()
         st.info(generate_commentary(h_stats['name'], a_stats['name'], res))
         
-        # KARTLARDA LOGO KULLANIMI
         c1, c2, c3 = st.columns(3)
         c1.markdown(f"<div class='stat-card'><img src='{h_logo}' width='50'><br><div class='stat-lbl'>{h_stats['name']}</div><div class='stat-val' style='color:#3b82f6'>%{res['1x2'][0]:.1f}</div></div>", unsafe_allow_html=True)
         c2.markdown(f"<div class='stat-card'><br><div class='stat-lbl'>BERABERLİK</div><div class='stat-val' style='color:#94a3b8'>%{res['1x2'][1]:.1f}</div></div>", unsafe_allow_html=True)
@@ -420,6 +451,5 @@ def main():
             else:
                 st.write("Belirgin bir olasılık bulunamadı.")
 
-# SYNTAX HATASI GİDERİLDİ: Fonksiyonlar ayrıldı
 if __name__ == "__main__":
     main()
