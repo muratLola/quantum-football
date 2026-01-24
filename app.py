@@ -7,6 +7,11 @@ import plotly.express as px
 from datetime import datetime, timedelta
 import time
 import os
+import logging
+
+# --- LOGGING AYARLARI (KURUMSAL SEVİYE) ---
+logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.ERROR)
+logger = logging.getLogger(__name__)
 
 # --- FIREBASE EKLENTİLERİ ---
 import firebase_admin
@@ -21,7 +26,7 @@ CONFIG = {
     # API Key ve Admin Şifresi secrets.toml üzerinden çekilecek
 }
 
-# TAKIM LOGOLARI
+# TAKIM LOGOLARI (Genişletilebilir)
 TEAM_LOGOS = {
     # Türkiye
     2054: "https://upload.wikimedia.org/wikipedia/commons/f/f6/Galatasaray_Sports_Club_Logo.png",
@@ -46,8 +51,8 @@ if not firebase_admin._apps:
             cred = credentials.Certificate(dict(st.secrets["firebase"]))
             firebase_admin.initialize_app(cred)
     except Exception as e:
-        st.warning("Veritabanı bağlantısı kurulamadı. (Loglama Devre Dışı)")
-        print(f"Firebase Init Error: {e}")
+        logger.error(f"Firebase Init Error: {e}")
+        # Kullanıcıya sessiz kal, loga yaz
 
 try:
     db = firestore.client()
@@ -67,7 +72,7 @@ USER_TIER = "FREE" if IS_GUEST else "PRO"
 # -----------------------------------------------------------------------------
 # 3. YARDIMCI FONKSİYONLAR
 # -----------------------------------------------------------------------------
-def log_activity(league, match, h_att, a_att, sim_count):
+def log_activity(league, match, h_att, a_att, sim_count, duration):
     if db is None: return
     try:
         db.collection("analysis_logs").add({
@@ -77,53 +82,58 @@ def log_activity(league, match, h_att, a_att, sim_count):
             "league": league,
             "match": match,
             "sims": sim_count,
+            "duration_sec": duration,
             "settings": {"h": h_att, "a": a_att}
         })
     except Exception as e:
-        print(f"Log Error: {e}") 
+        logger.error(f"Firestore Log Error: {e}")
 
-def generate_commentary(h_name, a_name, res):
-    """xG ve Olasılık bazlı gelişmiş yorum üretir"""
+def generate_commentary(h_stats, a_stats, res):
+    """xG, Olasılık ve Over/Under bazlı gelişmiş yorum üretir"""
     p_h, p_d, p_a = res['1x2']
     xg_h, xg_a = res['xg']
-    total_xg = xg_h + xg_a
     xg_diff = xg_h - xg_a
+    
+    # Form bilgisini temizle
+    h_form = h_stats.get('form', '').replace(',', '')
+    a_form = a_stats.get('form', '').replace(',', '')
 
     # 1. Galibiyet Analizi
-    if p_h > 65:
-        main_msg = f"🔥 **{h_name}** sahasında çok baskın (%{p_h:.1f})."
-        if xg_diff > 1.0: main_msg += f" Gol beklentisi farkı ({xg_diff:.2f}) ezici bir oyuna işaret ediyor."
-    elif p_a > 60:
-        main_msg = f"🚨 **{a_name}** deplasmanda olmasına rağmen net favori (%{p_a:.1f}). Kadro kalitesi fark yaratıyor."
-    elif p_d > 32:
-        main_msg = f"⚖️ **Taktik Savaşı.** Beraberlik ihtimali (%{p_d:.1f}) lig ortalamasının çok üzerinde."
-    elif abs(p_h - p_a) < 10:
-        main_msg = f"⚔️ **Ortada Bir Maç.** Kazanma şansları çok yakın (%{p_h:.1f} vs %{p_a:.1f}). İlk golü atan maçı %70 çözer."
+    if p_h > 60:
+        main_msg = f"🔥 **{h_stats['name']}** sahasında favori (%{p_h:.1f})."
+        if h_form.startswith('W'): main_msg += " Son maçı kazanmanın moraliyle sahada!"
+    elif p_a > 55:
+        main_msg = f"🚨 **{a_stats['name']}** deplasmanda baskın (%{p_a:.1f})."
+        if a_form.startswith('W'): main_msg += " Form grafiği yükselişte."
+    elif p_d > 30:
+        main_msg = f"⚖️ **Denge Maçı.** Beraberlik ihtimali (%{p_d:.1f}) yüksek."
     else:
-        favori = h_name if p_h > p_a else a_name
-        main_msg = f"📊 **Çekişmeli Mücadele.** Net favori yok ama ibre hafifçe **{favori}** tarafına kayıyor."
+        main_msg = f"📊 **Çekişmeli Mücadele.** Net favori yok."
     
-    # 2. Gol Analizi (Over/Under)
-    if total_xg > 3.0:
-        goal_msg = " ⚽ **Gol Yağmuru:** İki takımın da hücum gücü yüksek, 2.5 Üst ihtimali güçlü."
-    elif total_xg < 2.0:
-        goal_msg = " 🛡️ **Kısır Maç:** Savunma ağırlıklı, düşük skorlu bir mücadele beklenebilir."
+    # 2. xG Yorumu
+    if abs(xg_diff) < 0.25:
+        goal_msg = " Gol beklentileri kafa kafaya, ilk golü atan avantajı kapar."
+    elif (xg_h + xg_a) > 2.8:
+        goal_msg = " ⚽ **Gol Şöleni:** İstatistikler 2.5 Üst ihtimalini destekliyor."
     else:
         goal_msg = ""
 
     return main_msg + goal_msg
 
 # -----------------------------------------------------------------------------
-# 4. SİMÜLASYON MOTORU
+# 4. SİMÜLASYON MOTORU (THE SINGULARITY EDITION)
 # -----------------------------------------------------------------------------
 class SimulationEngine:
-    def __init__(self):
-        self.rng = np.random.default_rng()
+    def __init__(self, use_fixed_seed=False):
+        # Hibrit Seed Kontrolü (CEO Önerisi)
+        if use_fixed_seed:
+            self.rng = np.random.default_rng(seed=42)
+        else:
+            self.rng = np.random.default_rng()
 
     def run_monte_carlo(self, h_stats, a_stats, avg_g, params):
         sims = params['sim_count']
         
-        # 1. GÜÇ HESABI
         h_attack = (h_stats['gf'] / avg_g) * params['h_att_factor']
         h_def = (h_stats['ga'] / avg_g) * params['h_def_factor']
         a_attack = (a_stats['gf'] / avg_g) * params['a_att_factor']
@@ -132,24 +142,40 @@ class SimulationEngine:
         base_xg_h = h_attack * a_def * avg_g
         base_xg_a = a_attack * h_def * avg_g
 
-        # Ev Sahibi Avantajı
+        # --- AĞIRLIKLI FORM (Zaman Bazlı) ---
+        def calculate_weighted_form(form_str):
+            if not form_str: return 1.0
+            matches = form_str.replace(',', '')
+            boost = 1.0
+            # [En Yeni ... En Eski] -> Yeni maçın etkisi daha fazla
+            weights = [1.5, 1.25, 1.0, 0.75, 0.5] 
+            recent = matches[:5] 
+            current_weights = weights[:len(recent)]
+
+            for i, char in enumerate(recent):
+                w = current_weights[i]
+                if char == 'W': boost += 0.04 * w
+                elif char == 'D': boost += 0.01 * w
+                elif char == 'L': boost -= 0.03 * w
+            
+            return max(0.85, min(boost, 1.25))
+
+        base_xg_h *= calculate_weighted_form(h_stats.get('form', ''))
+        base_xg_a *= calculate_weighted_form(a_stats.get('form', ''))
+
         base_xg_h *= params['home_adv']
 
-        # Eksik Oyuncu Cezası
         if params.get('h_missing', 0) > 0: base_xg_h *= (1 - (params['h_missing'] * 0.08))
         if params.get('a_missing', 0) > 0: base_xg_a *= (1 - (params['a_missing'] * 0.08))
 
-        # 2. BELİRSİZLİK (UNCERTAINTY)
         sigma = 0.05 if params['tier'] == 'PRO' else 0.12
         
         random_factors_h = self.rng.normal(1, sigma, sims)
         random_factors_a = self.rng.normal(1, sigma, sims)
         
-        # Negatif xG engellemek için np.clip
         final_xg_h = np.clip(base_xg_h * random_factors_h, 0.05, None)
         final_xg_a = np.clip(base_xg_a * random_factors_a, 0.05, None)
 
-        # 3. POISSON
         gh_ht = self.rng.poisson(final_xg_h * 0.45)
         ga_ht = self.rng.poisson(final_xg_a * 0.45)
         gh_ft = self.rng.poisson(final_xg_h * 0.55)
@@ -168,21 +194,39 @@ class SimulationEngine:
         h, a = data["h"], data["a"]
         sims = data["sims"]
 
-        p_home = np.mean(h > a) * 100
-        p_draw = np.mean(h == a) * 100
-        p_away = np.mean(h < a) * 100
+        # Olasılıklar
+        home_wins = (h > a)
+        draws = (h == a)
+        away_wins = (h < a)
 
-        # Skor Matrisi
+        p_home = np.mean(home_wins) * 100
+        p_draw = np.mean(draws) * 100
+        p_away = np.mean(away_wins) * 100
+
+        # --- GÜVEN ARALIĞI (TAM KAPSAMLI) ---
+        def calc_ci(p, n):
+            return 1.96 * np.sqrt((p/100 * (1 - p/100)) / n) * 100
+        
+        ci = {
+            "h": calc_ci(p_home, sims),
+            "d": calc_ci(p_draw, sims),
+            "a": calc_ci(p_away, sims)
+        }
+
+        # --- SKOR MATRİSİ (BUCKET SİSTEMİ - 6+) ---
         matrix = np.zeros((7, 7))
+        # 6'dan büyük skorları 6. indekste topla (Veri kaybını önler)
+        h_clipped = np.clip(h, 0, 6)
+        a_clipped = np.clip(a, 0, 6)
+        
         for i in range(7):
             for j in range(7):
-                matrix[i, j] = np.sum((h == i) & (a == j)) / sims * 100
+                matrix[i, j] = np.sum((h_clipped == i) & (a_clipped == j)) / sims * 100
 
         scores = [f"{i}-{j}" for i, j in zip(h, a)]
         unique, counts = np.unique(scores, return_counts=True)
         top_scores = sorted(zip(unique, counts/sims*100), key=lambda x: x[1], reverse=True)[:10]
 
-        # HT/FT
         h_ht, a_ht = data["ht"]
         ht_res = np.where(h_ht > a_ht, 1, np.where(h_ht < a_ht, 2, 0))
         ft_res = np.where(h > a, 1, np.where(h < a, 2, 0))
@@ -196,6 +240,7 @@ class SimulationEngine:
 
         return {
             "1x2": [p_home, p_draw, p_away],
+            "ci": ci,
             "matrix": matrix,
             "top_scores": top_scores,
             "htft": htft,
@@ -203,39 +248,75 @@ class SimulationEngine:
         }
 
 # -----------------------------------------------------------------------------
-# 5. DATA MANAGER (FULL SEZON VERİSİ)
+# 5. DATA MANAGER (IMMORTAL - CRASH PROOF)
 # -----------------------------------------------------------------------------
 class DataManager:
     def __init__(self, api_key):
         self.headers = {"X-Auth-Token": api_key}
 
-    @st.cache_data(ttl=1800)
-    def fetch_data(_self, league_code):
+    def fetch_data(self, league_code):
+        cache_key = f"data_{league_code}"
+        
+        # 1. Önce Cache Kontrolü
+        if cache_key in st.session_state:
+            last_fetch, data = st.session_state[cache_key]
+            if (datetime.now() - last_fetch).seconds < 1800:
+                return data, last_fetch
+
+        # 2. API İsteği (Tüm Sezon)
         try:
-            r1 = requests.get(f"{CONFIG['API_URL']}/competitions/{league_code}/standings", headers=_self.headers)
+            r1 = requests.get(f"{CONFIG['API_URL']}/competitions/{league_code}/standings", headers=self.headers)
             if r1.status_code == 429:
-                st.warning("⚠️ API Limiti: Lütfen 30 saniye bekleyin.")
+                st.warning("⚠️ API Limiti. Önbellek kullanılıyor.")
+                if cache_key in st.session_state:
+                    return st.session_state[cache_key][1], st.session_state[cache_key][0]
                 return None, None
             
             standings = r1.json()
-            
-            # --- DEĞİŞİKLİK BURADA: Date filtresi kaldırıldı ---
-            # Artık tüm sezonun (oynanmış ve oynanacak) verisi çekiliyor.
-            r2 = requests.get(f"{CONFIG['API_URL']}/competitions/{league_code}/matches", 
-                              headers=_self.headers) # Params kaldırıldı -> Default: Current Season
-            
+            r2 = requests.get(f"{CONFIG['API_URL']}/competitions/{league_code}/matches", headers=self.headers)
             matches = r2.json() if r2.status_code == 200 else {}
             
-            return standings, matches
+            # Veriyi Hafızaya Al
+            st.session_state[cache_key] = (datetime.now(), (standings, matches))
+            return (standings, matches), datetime.now()
+
         except Exception as e:
-            print(f"Data Fetch Error: {e}")
+            logger.error(f"API Fetch Error: {e}")
+            if cache_key in st.session_state:
+                st.warning("⚠️ Bağlantı hatası. Önbellek kullanılıyor.")
+                return st.session_state[cache_key][1], st.session_state[cache_key][0]
             return None, None
 
-    def get_team_stats(self, standings, team_id, table_type='TOTAL', default_name="Takım"):
+    def calculate_form_from_matches(self, matches_data, team_id):
+        if not matches_data or 'matches' not in matches_data: return ""
+        
+        played_matches = []
+        for m in matches_data['matches']:
+            if m['status'] == 'FINISHED':
+                if m['homeTeam']['id'] == team_id or m['awayTeam']['id'] == team_id:
+                    played_matches.append(m)
+        
+        # Yeniden Eskiye Sırala
+        played_matches.sort(key=lambda x: x['utcDate'], reverse=True)
+        
+        form_chars = []
+        for m in played_matches[:5]: 
+            winner = m['score']['winner']
+            if winner == 'DRAW':
+                form_chars.append('D')
+            elif (winner == 'HOME_TEAM' and m['homeTeam']['id'] == team_id) or \
+                 (winner == 'AWAY_TEAM' and m['awayTeam']['id'] == team_id):
+                form_chars.append('W')
+            else:
+                form_chars.append('L')
+                
+        return ",".join(form_chars) 
+
+    def get_team_stats(self, standings, matches, team_id, table_type='TOTAL', default_name="Takım"):
         try:
             target_table = []
             s_list = standings.get('standings', [])
-            if not s_list: return {"name": default_name, "id": team_id, "gf": 1.4, "ga": 1.4}
+            if not s_list: return {"name": default_name, "id": team_id, "gf": 1.4, "ga": 1.4, "form": ""}
 
             for item in s_list:
                 if item.get('type') == table_type:
@@ -243,24 +324,32 @@ class DataManager:
                     break
             
             if not target_table and table_type != 'TOTAL':
-                return self.get_team_stats(standings, team_id, 'TOTAL', default_name)
+                return self.get_team_stats(standings, matches, team_id, 'TOTAL', default_name)
 
             for row in target_table:
                 if row['team']['id'] == team_id:
                     played = row['playedGames']
+                    form = row.get('form', '')
+                    # Otonom Form Hesaplama
+                    if not form and matches:
+                        form = self.calculate_form_from_matches(matches, team_id)
+                    
+                    form = form.replace(',', '') if form else ""
+
                     if played < 2: 
-                        return {"name": row['team']['name'], "id": team_id, "gf": 1.5, "ga": 1.5}
+                        return {"name": row['team']['name'], "id": team_id, "gf": 1.5, "ga": 1.5, "form": form}
                     
                     return {
                         "name": row['team']['name'],
                         "id": team_id,
                         "gf": row['goalsFor'] / played,
-                        "ga": row['goalsAgainst'] / played
+                        "ga": row['goalsAgainst'] / played,
+                        "form": form
                     }
         except Exception as e:
-            print(f"Stats Parse Error: {e}")
+            logger.error(f"Parsing Stats Error: {e}")
             pass
-        return {"name": default_name, "id": team_id, "gf": 1.4, "ga": 1.4}
+        return {"name": default_name, "id": team_id, "gf": 1.4, "ga": 1.4, "form": ""}
 
     def get_league_avg(self, standings):
         try:
@@ -304,12 +393,14 @@ def main():
             | Özellik | FREE | PRO ⚡ |
             |---|---|---|
             | **Simülasyon** | 5.000 | **250.000** |
+            | **Form Analizi** | ❌ | ✅ |
             | **Eksik Oyuncu** | ❌ | ✅ |
-            | **Detaylı xG** | ❌ | ✅ |
             """)
 
         st.divider()
         st.subheader("⚙️ Ayarlar")
+        
+        use_dynamic = st.checkbox("🎲 Dinamik Simülasyon", value=True, help="Her analizde farklı sonuçlar üretir (Gerçek Monte Carlo).")
         
         max_sim = 250000 if not IS_GUEST else 5000
         default_sim = 50000 if not IS_GUEST else 1000
@@ -323,6 +414,9 @@ def main():
             st.caption("🚑 Eksik Oyuncu (PRO)")
             h_miss = st.number_input("Ev Sahibi Eksik", 0, 5, 0)
             a_miss = st.number_input("Deplasman Eksik", 0, 5, 0)
+            
+            if h_miss > 5 or a_miss > 5:
+                st.warning("⚠️ 5'ten fazla eksik oyuncu maçın iptaline yol açabilir.")
         else:
             h_miss, a_miss = 0, 0
 
@@ -331,6 +425,9 @@ def main():
             pw = st.text_input("Şifre", type="password")
             admin_pass = st.secrets.get("ADMIN_PASS")
             if admin_pass and pw == admin_pass:
+                if st.button("🗑️ Önbelleği Temizle"):
+                    st.session_state.clear()
+                    st.rerun()
                 if st.button("Logları Getir") and db:
                     try:
                         docs = db.collection("analysis_logs").order_by("timestamp", direction="DESCENDING").limit(20).stream()
@@ -349,10 +446,18 @@ def main():
         leagues = {"Süper Lig": "TR1", "Premier League": "PL", "La Liga": "PD", "Bundesliga": "BL1", "Serie A": "SA", "Şampiyonlar Ligi": "CL"}
         sel_league = st.selectbox("Lig Seçiniz", list(leagues.keys()))
     
-    standings, fixtures = dm.fetch_data(leagues[sel_league])
-    if not fixtures: st.stop()
+    data_tuple, fetch_time = dm.fetch_data(leagues[sel_league])
+    
+    if not data_tuple:
+        st.error("Veri alınamadı. Lütfen daha sonra tekrar deneyin.")
+        st.stop()
         
-    # --- MAÇLARI AYIKLA (HEM OYNANMIŞ HEM GELECEK) ---
+    standings, fixtures = data_tuple
+    
+    if fetch_time:
+        age_min = int((datetime.now() - fetch_time).total_seconds() / 60)
+        st.caption(f"🕒 Veri Güncelliği: {age_min} dakika önce güncellendi.")
+
     upcoming_matches = []
     past_matches = []
     
@@ -367,35 +472,27 @@ def main():
             past_label = f"{match_label} {score} ✅"
             past_matches.append((past_label, m))
 
-    # Listeyi Birleştir: Önce Gelecek Maçlar, Sonra Geçmiş (Ters Tarih Sırası)
     all_matches_dict = {}
-    
-    # Gelecek maçları tarihe göre sırala
     upcoming_matches.sort(key=lambda x: x[1]['utcDate'])
-    for lbl, m in upcoming_matches:
-        all_matches_dict[lbl] = m
-        
-    # Geçmiş maçları tarihe göre (yeniden eskiye) sırala
+    for lbl, m in upcoming_matches: all_matches_dict[lbl] = m
     past_matches.sort(key=lambda x: x[1]['utcDate'], reverse=True)
-    for lbl, m in past_matches:
-        all_matches_dict[lbl] = m
+    for lbl, m in past_matches: all_matches_dict[lbl] = m
 
     if not all_matches_dict: st.warning("Maç verisi bulunamadı."); st.stop()
 
     with c2: 
-        sel_match_name = st.selectbox("Maç Seçiniz (Gelecek & Geçmiş)", list(all_matches_dict.keys()))
+        sel_match_name = st.selectbox("Maç Seçiniz", list(all_matches_dict.keys()))
     
     if st.button("🚀 ANALİZİ BAŞLAT", use_container_width=True):
+        start_time = time.time()
+        
         m = all_matches_dict[sel_match_name]
-        log_activity(leagues[sel_league], sel_match_name, h_att, a_att, sim_count)
         
         h_id, a_id = m['homeTeam']['id'], m['awayTeam']['id']
         
-        # --- GÜÇLENDİRİLMİŞ VERİ ÇEKME ---
-        h_stats = dm.get_team_stats(standings, h_id, 'HOME', m['homeTeam']['name'])
-        a_stats = dm.get_team_stats(standings, a_id, 'AWAY', m['awayTeam']['name'])
+        h_stats = dm.get_team_stats(standings, fixtures, h_id, 'HOME', m['homeTeam']['name'])
+        a_stats = dm.get_team_stats(standings, fixtures, a_id, 'AWAY', m['awayTeam']['name'])
         
-        # --- LOGO ÇEKME MANTIĞI ---
         h_logo = TEAM_LOGOS.get(h_stats['id'], DEFAULT_LOGO)
         a_logo = TEAM_LOGOS.get(a_stats['id'], DEFAULT_LOGO)
         
@@ -410,15 +507,18 @@ def main():
             "tier": USER_TIER
         }
 
-        eng = SimulationEngine()
+        eng = SimulationEngine(use_fixed_seed=not use_dynamic)
+        
         with st.spinner(f"Kuantum motoru hesaplıyor: {h_stats['name']} (Ev) vs {a_stats['name']} (Dep)..."):
             raw = eng.run_monte_carlo(h_stats, a_stats, league_avg, params)
             res = eng.analyze_results(raw)
 
+        duration = time.time() - start_time
+        log_activity(leagues[sel_league], sel_match_name, h_att, a_att, sim_count, duration)
+
         st.divider()
-        st.info(generate_commentary(h_stats['name'], a_stats['name'], res))
+        st.info(generate_commentary(h_stats, a_stats, res))
         
-        # --- KARTLARDA LOGO KULLANIMI ---
         c1, c2, c3 = st.columns(3)
         c1.markdown(f"<div class='stat-card'><img src='{h_logo}' width='60'><br><div class='stat-lbl'>{h_stats['name']}</div><div class='stat-val' style='color:#3b82f6'>%{res['1x2'][0]:.1f}</div></div>", unsafe_allow_html=True)
         c2.markdown(f"<div class='stat-card'><br><br><div class='stat-lbl'>BERABERLİK</div><div class='stat-val' style='color:#94a3b8'>%{res['1x2'][1]:.1f}</div></div>", unsafe_allow_html=True)
@@ -426,6 +526,8 @@ def main():
         
         st.write("")
         st.progress(res['1x2'][0]/100, text=f"Ev Sahibi Galibiyet İhtimali: %{res['1x2'][0]:.1f}")
+        
+        st.caption(f"📊 Güven Aralığı (Ev): ±%{res['ci']['h']:.1f} | (Dep): ±%{res['ci']['a']:.1f} | ⏱️ Hesaplama: {duration:.3f} sn")
 
         st.markdown(f"""
         ### 📊 Detaylı Analiz 
@@ -433,14 +535,18 @@ def main():
         <span style='color:#ff4b4b; font-weight:bold'>Dep xG: {res['xg'][1]:.2f}</span>
         """, unsafe_allow_html=True)
         
+        h_form_display = " ".join(list(h_stats['form'])) if h_stats['form'] else "Nötr"
+        a_form_display = " ".join(list(a_stats['form'])) if a_stats['form'] else "Nötr"
+        st.caption(f"📈 Form Durumu (Yeni -> Eski): {h_stats['name']} [{h_form_display}] - {a_stats['name']} [{a_form_display}]")
+
         tab1, tab2, tab3 = st.tabs(["Skor Matrisi", "En Olası Skorlar", "HT/FT"])
         
         with tab1:
             fig = go.Figure(data=go.Heatmap(
                 z=res['matrix'], 
                 colorscale='Magma',
-                x=[0, 1, 2, 3, 4, 5, 6],
-                y=[0, 1, 2, 3, 4, 5, 6]
+                x=[0, 1, 2, 3, 4, 5, "6+"],
+                y=[0, 1, 2, 3, 4, 5, "6+"]
             ))
             fig.update_layout(
                 paper_bgcolor='rgba(0,0,0,0)', font_color='white', height=350, 
