@@ -6,3 +6,4 @@ qiskit
 qiskit-aer
 lxml
 plotly
+firebase-admin
