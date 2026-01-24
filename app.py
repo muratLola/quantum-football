@@ -21,8 +21,7 @@ CONFIG = {
     # API Key ve Admin Şifresi secrets.toml üzerinden çekilecek
 }
 
-# TAKIM LOGOLARI (Genişletilebilir)
-# ID'leri API'den gelen ID'lerdir.
+# TAKIM LOGOLARI
 TEAM_LOGOS = {
     # Türkiye
     2054: "https://upload.wikimedia.org/wikipedia/commons/f/f6/Galatasaray_Sports_Club_Logo.png",
@@ -30,12 +29,11 @@ TEAM_LOGOS = {
     2036: "https://upload.wikimedia.org/wikipedia/commons/2/20/Besiktas_jk.png",
     2061: "https://upload.wikimedia.org/wikipedia/tr/a/ab/Trabzonspor_Amblemi.png",
     2058: "https://upload.wikimedia.org/wikipedia/tr/e/e0/Samsunspor_logo_2.png",
-    # Avrupa Devleri (Örnek)
-    86:  "https://upload.wikimedia.org/wikipedia/tr/f/f4/Real_Madrid.png", # Real Madrid
-    81:  "https://upload.wikimedia.org/wikipedia/tr/9/96/FC_Barcelona.png", # Barcelona
-    65:  "https://upload.wikimedia.org/wikipedia/tr/b/b6/Manchester_City.png", # Man City
-    64:  "https://upload.wikimedia.org/wikipedia/tr/0/03/Liverpool_FC.png", # Liverpool
-    5:   "https://upload.wikimedia.org/wikipedia/commons/1/1b/FC_Bayern_M%C3%BCnchen_logo_%282017%29.svg", # Bayern
+    # Avrupa (Örnek)
+    86:  "https://upload.wikimedia.org/wikipedia/tr/f/f4/Real_Madrid.png",
+    81:  "https://upload.wikimedia.org/wikipedia/tr/9/96/FC_Barcelona.png",
+    65:  "https://upload.wikimedia.org/wikipedia/tr/b/b6/Manchester_City.png",
+    64:  "https://upload.wikimedia.org/wikipedia/tr/0/03/Liverpool_FC.png",
 }
 DEFAULT_LOGO = "https://cdn-icons-png.flaticon.com/512/53/53283.png"
 
@@ -134,13 +132,14 @@ class SimulationEngine:
         base_xg_h = h_attack * a_def * avg_g
         base_xg_a = a_attack * h_def * avg_g
 
+        # Ev Sahibi Avantajı
         base_xg_h *= params['home_adv']
 
         # Eksik Oyuncu Cezası
         if params.get('h_missing', 0) > 0: base_xg_h *= (1 - (params['h_missing'] * 0.08))
         if params.get('a_missing', 0) > 0: base_xg_a *= (1 - (params['a_missing'] * 0.08))
 
-        # 2. BELİRSİZLİK (PRO vs FREE Farkı)
+        # 2. BELİRSİZLİK (UNCERTAINTY)
         sigma = 0.05 if params['tier'] == 'PRO' else 0.12
         
         random_factors_h = self.rng.normal(1, sigma, sims)
@@ -150,7 +149,7 @@ class SimulationEngine:
         final_xg_h = np.clip(base_xg_h * random_factors_h, 0.05, None)
         final_xg_a = np.clip(base_xg_a * random_factors_a, 0.05, None)
 
-        # 3. POISSON SİMÜLASYONU
+        # 3. POISSON
         gh_ht = self.rng.poisson(final_xg_h * 0.45)
         ga_ht = self.rng.poisson(final_xg_a * 0.45)
         gh_ft = self.rng.poisson(final_xg_h * 0.55)
@@ -204,7 +203,7 @@ class SimulationEngine:
         }
 
 # -----------------------------------------------------------------------------
-# 5. DATA MANAGER
+# 5. DATA MANAGER (FULL SEZON VERİSİ)
 # -----------------------------------------------------------------------------
 class DataManager:
     def __init__(self, api_key):
@@ -220,10 +219,11 @@ class DataManager:
             
             standings = r1.json()
             
-            today = datetime.now().strftime("%Y-%m-%d")
-            future = (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")
+            # --- DEĞİŞİKLİK BURADA: Date filtresi kaldırıldı ---
+            # Artık tüm sezonun (oynanmış ve oynanacak) verisi çekiliyor.
             r2 = requests.get(f"{CONFIG['API_URL']}/competitions/{league_code}/matches", 
-                              headers=_self.headers, params={"dateFrom": today, "dateTo": future})
+                              headers=_self.headers) # Params kaldırıldı -> Default: Current Season
+            
             matches = r2.json() if r2.status_code == 200 else {}
             
             return standings, matches
@@ -299,13 +299,11 @@ def main():
             st.markdown(f"<div class='tier-badge pro-tier'>PLAN: {USER_TIER} ⚡</div>", unsafe_allow_html=True)
             st.success(f"Hoşgeldin,\n{current_user_email}")
         
-        # --- ÜYELİK TABLOSU (YENİ EKLENDİ) ---
         with st.expander("ℹ️ Üyelik Avantajları", expanded=False):
             st.markdown("""
             | Özellik | FREE | PRO ⚡ |
             |---|---|---|
             | **Simülasyon** | 5.000 | **250.000** |
-            | **İsabet Oranı** | Standart | **Yüksek** |
             | **Eksik Oyuncu** | ❌ | ✅ |
             | **Detaylı xG** | ❌ | ✅ |
             """)
@@ -354,14 +352,42 @@ def main():
     standings, fixtures = dm.fetch_data(leagues[sel_league])
     if not fixtures: st.stop()
         
-    matches = {f"{m['homeTeam']['name']} vs {m['awayTeam']['name']}": m for m in fixtures['matches'] if m['status'] == 'SCHEDULED'}
-    if not matches: st.warning("Planlanmış maç yok."); st.stop()
+    # --- MAÇLARI AYIKLA (HEM OYNANMIŞ HEM GELECEK) ---
+    upcoming_matches = []
+    past_matches = []
+    
+    for m in fixtures.get('matches', []):
+        match_date = m['utcDate'][:10]
+        match_label = f"{m['homeTeam']['name']} vs {m['awayTeam']['name']} ({match_date})"
+        
+        if m['status'] in ['SCHEDULED', 'TIMED']:
+            upcoming_matches.append((match_label, m))
+        elif m['status'] == 'FINISHED':
+            score = f"[{m['score']['fullTime']['home']}-{m['score']['fullTime']['away']}]"
+            past_label = f"{match_label} {score} ✅"
+            past_matches.append((past_label, m))
 
-    with c2: sel_match_name = st.selectbox("Maç Seçiniz", list(matches.keys()))
+    # Listeyi Birleştir: Önce Gelecek Maçlar, Sonra Geçmiş (Ters Tarih Sırası)
+    all_matches_dict = {}
+    
+    # Gelecek maçları tarihe göre sırala
+    upcoming_matches.sort(key=lambda x: x[1]['utcDate'])
+    for lbl, m in upcoming_matches:
+        all_matches_dict[lbl] = m
+        
+    # Geçmiş maçları tarihe göre (yeniden eskiye) sırala
+    past_matches.sort(key=lambda x: x[1]['utcDate'], reverse=True)
+    for lbl, m in past_matches:
+        all_matches_dict[lbl] = m
+
+    if not all_matches_dict: st.warning("Maç verisi bulunamadı."); st.stop()
+
+    with c2: 
+        sel_match_name = st.selectbox("Maç Seçiniz (Gelecek & Geçmiş)", list(all_matches_dict.keys()))
     
     if st.button("🚀 ANALİZİ BAŞLAT", use_container_width=True):
-        m = matches[sel_match_name]
-        log_activity(sel_league, sel_match_name, h_att, a_att, sim_count)
+        m = all_matches_dict[sel_match_name]
+        log_activity(leagues[sel_league], sel_match_name, h_att, a_att, sim_count)
         
         h_id, a_id = m['homeTeam']['id'], m['awayTeam']['id']
         
@@ -369,7 +395,7 @@ def main():
         h_stats = dm.get_team_stats(standings, h_id, 'HOME', m['homeTeam']['name'])
         a_stats = dm.get_team_stats(standings, a_id, 'AWAY', m['awayTeam']['name'])
         
-        # --- LOGO ÇEKME MANTIĞI (DÜZELTİLDİ) ---
+        # --- LOGO ÇEKME MANTIĞI ---
         h_logo = TEAM_LOGOS.get(h_stats['id'], DEFAULT_LOGO)
         a_logo = TEAM_LOGOS.get(a_stats['id'], DEFAULT_LOGO)
         
@@ -392,7 +418,7 @@ def main():
         st.divider()
         st.info(generate_commentary(h_stats['name'], a_stats['name'], res))
         
-        # --- KARTLARDA LOGO KULLANIMI (HTML İLE) ---
+        # --- KARTLARDA LOGO KULLANIMI ---
         c1, c2, c3 = st.columns(3)
         c1.markdown(f"<div class='stat-card'><img src='{h_logo}' width='60'><br><div class='stat-lbl'>{h_stats['name']}</div><div class='stat-val' style='color:#3b82f6'>%{res['1x2'][0]:.1f}</div></div>", unsafe_allow_html=True)
         c2.markdown(f"<div class='stat-card'><br><br><div class='stat-lbl'>BERABERLİK</div><div class='stat-val' style='color:#94a3b8'>%{res['1x2'][1]:.1f}</div></div>", unsafe_allow_html=True)
