@@ -9,11 +9,11 @@ import time
 import logging
 from typing import Dict, Tuple, List, Any, Optional
 
-# --- LOGGING AYARLARI (KURUMSAL) ---
+# --- LOGGING AYARLARI (ENTERPRISE) ---
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.ERROR)
 logger = logging.getLogger(__name__)
 
-# --- FIREBASE EKLENTİLERİ ---
+# --- FIREBASE ---
 import firebase_admin
 from firebase_admin import credentials
 from firebase_admin import firestore
@@ -74,41 +74,8 @@ def log_activity(league: str, match: str, h_att: float, a_att: float, sim_count:
     except Exception as e:
         logger.error(f"Firestore Log Error: {e}")
 
-def generate_commentary(h_stats: Dict, a_stats: Dict, res: Dict) -> str:
-    p_h, p_d, p_a = res['1x2']
-    xg_h, xg_a = res['xg']
-    xg_diff = xg_h - xg_a
-    total_xg = xg_h + xg_a
-    
-    h_form = h_stats.get('form', '').replace(',', '')
-    a_form = a_stats.get('form', '').replace(',', '')
-
-    # 1. Galibiyet Analizi
-    if p_h > 60:
-        main_msg = f"🔥 **{h_stats['name']}** sahasında favori (%{p_h:.1f})."
-        if h_form.startswith('W'): main_msg += " Son maçı kazanmanın moraliyle sahada!"
-    elif p_a > 55:
-        main_msg = f"🚨 **{a_stats['name']}** deplasmanda baskın (%{p_a:.1f})."
-        if a_form.startswith('W'): main_msg += " Form grafiği yükselişte."
-    elif p_d > 30:
-        main_msg = f"⚖️ **Denge Maçı.** Beraberlik ihtimali (%{p_d:.1f}) yüksek."
-    else:
-        main_msg = f"📊 **Çekişmeli Mücadele.** Net favori yok."
-    
-    # 2. Gol Analizi
-    if abs(xg_diff) < 0.25:
-        goal_msg = " Gol beklentileri eşit, ilk golü atan avantajı kapar."
-    elif total_xg > 3.0:
-        goal_msg = " ⚽ **Gol Şöleni:** 2.5 Üst ihtimali güçlü."
-    elif total_xg < 2.0:
-        goal_msg = " 🛡️ **Kısır Maç:** Savunma ağırlıklı bir oyun beklenebilir."
-    else:
-        goal_msg = ""
-
-    return main_msg + goal_msg
-
 # -----------------------------------------------------------------------------
-# 3. SİMÜLASYON MOTORU (500K KAPASİTELİ)
+# 3. SİMÜLASYON MOTORU (RESEARCH GRADE)
 # -----------------------------------------------------------------------------
 class SimulationEngine:
     def __init__(self, use_fixed_seed: bool = False):
@@ -157,6 +124,7 @@ class SimulationEngine:
 
         sigma = 0.05 if params['tier'] == 'PRO' else 0.12
         
+        # Monte Carlo Randomness
         random_factors_h = self.rng.normal(1, sigma, sims)
         random_factors_a = self.rng.normal(1, sigma, sims)
         
@@ -174,18 +142,20 @@ class SimulationEngine:
         return {
             "h": total_h, "a": total_a,
             "ht": (gh_ht, ga_ht), "ft": (total_h, total_a),
-            "xg": (np.mean(final_xg_h), np.mean(final_xg_a)), "sims": sims
+            "xg_dist": (final_xg_h, final_xg_a), # Dağılım analizi için
+            "sims": sims
         }
 
     def analyze_results(self, data: Dict) -> Dict:
         h, a = data["h"], data["a"]
         sims = data["sims"]
 
+        # --- TEMEL OLASILIKLAR ---
         p_home = np.mean(h > a) * 100
         p_draw = np.mean(h == a) * 100
         p_away = np.mean(h < a) * 100
 
-        # Güven Aralığı (Confidence Interval)
+        # --- GÜVEN ARALIĞI ---
         def calc_ci(p, n):
             return 1.96 * np.sqrt((p/100 * (1 - p/100)) / n) * 100
         
@@ -195,41 +165,63 @@ class SimulationEngine:
             "a": calc_ci(p_away, sims)
         }
 
-        # Skor Matrisi (6+ Bucket - Bias Önleyici)
+        # --- GOL FARKI DAĞILIMI (Research Grade) ---
+        goal_diff = h - a
+        diff_bins = {
+            "≤-3": np.mean(goal_diff <= -3) * 100,
+            "-2": np.mean(goal_diff == -2) * 100,
+            "-1": np.mean(goal_diff == -1) * 100,
+            "0": np.mean(goal_diff == 0) * 100,
+            "+1": np.mean(goal_diff == 1) * 100,
+            "+2": np.mean(goal_diff == 2) * 100,
+            "≥+3": np.mean(goal_diff >= 3) * 100,
+        }
+
+        # --- SKOR MATRİSİ (Bucket) ---
         matrix = np.zeros((7, 7))
         h_clipped = np.clip(h, 0, 6)
         a_clipped = np.clip(a, 0, 6)
-        
         for i in range(7):
             for j in range(7):
                 matrix[i, j] = np.sum((h_clipped == i) & (a_clipped == j)) / sims * 100
 
+        # --- ENTROPY (Kaos Skoru) ---
+        flat_matrix = matrix.flatten()
+        flat_matrix = flat_matrix[flat_matrix > 0] / 100 # Normalize
+        entropy = -np.sum(flat_matrix * np.log(flat_matrix))
+
+        # --- GELİŞMİŞ PAZARLAR (DC, BTTS, OVER) ---
+        # Çifte Şans
+        dc = {
+            "1X": p_home + p_draw,
+            "X2": p_away + p_draw,
+            "12": p_home + p_away
+        }
+        # BTTS (Kg Var)
+        btts_yes = np.mean((h > 0) & (a > 0)) * 100
+        # 2.5 Üst
+        over_25 = np.mean((h + a) > 2.5) * 100
+
+        # En Olası Skorlar
         scores = [f"{i}-{j}" for i, j in zip(h, a)]
         unique, counts = np.unique(scores, return_counts=True)
         top_scores = sorted(zip(unique, counts/sims*100), key=lambda x: x[1], reverse=True)[:10]
-
-        h_ht, a_ht = data["ht"]
-        ht_res = np.where(h_ht > a_ht, 1, np.where(h_ht < a_ht, 2, 0))
-        ft_res = np.where(h > a, 1, np.where(h < a, 2, 0))
-        
-        htft = {}
-        labels = {1: "1", 0: "X", 2: "2"}
-        for i in [1, 0, 2]:
-            for j in [1, 0, 2]:
-                mask = (ht_res == i) & (ft_res == j)
-                htft[f"{labels[i]}/{labels[j]}"] = np.sum(mask) / sims * 100
 
         return {
             "1x2": [p_home, p_draw, p_away],
             "ci": ci,
             "matrix": matrix,
             "top_scores": top_scores,
-            "htft": htft,
-            "xg": data["xg"]
+            "goal_diff": diff_bins,
+            "entropy": entropy,
+            "dc": dc,
+            "btts": btts_yes,
+            "over_25": over_25,
+            "xg_dist": data["xg_dist"]
         }
 
 # -----------------------------------------------------------------------------
-# 4. VERİ YÖNETİCİSİ (API LOGO + CRASH PROOF)
+# 4. VERİ YÖNETİCİSİ
 # -----------------------------------------------------------------------------
 class DataManager:
     def __init__(self, api_key: str):
@@ -244,16 +236,14 @@ class DataManager:
                 return data, last_fetch
 
         try:
-            # Standings
             r1 = requests.get(f"{CONSTANTS['API_URL']}/competitions/{league_code}/standings", headers=self.headers)
             if r1.status_code == 429:
                 st.warning("⚠️ API Limiti. Önbellek kullanılıyor.")
                 if cache_key in st.session_state:
                     return st.session_state[cache_key][1], st.session_state[cache_key][0]
                 return None, None
-            standings = r1.json()
             
-            # Matches (Full Season)
+            standings = r1.json()
             r2 = requests.get(f"{CONSTANTS['API_URL']}/competitions/{league_code}/matches", headers=self.headers)
             matches = r2.json() if r2.status_code == 200 else {}
             
@@ -269,24 +259,17 @@ class DataManager:
 
     def _calculate_form_from_matches(self, matches_data: Dict, team_id: int) -> str:
         if not matches_data or 'matches' not in matches_data: return ""
-        
         played = [m for m in matches_data['matches'] 
                   if m['status'] == 'FINISHED' and 
                   (m['homeTeam']['id'] == team_id or m['awayTeam']['id'] == team_id)]
-        
         played.sort(key=lambda x: x['utcDate'], reverse=True)
-        
         form_chars = []
         for m in played[:5]: 
             winner = m['score']['winner']
-            if winner == 'DRAW':
-                form_chars.append('D')
+            if winner == 'DRAW': form_chars.append('D')
             elif (winner == 'HOME_TEAM' and m['homeTeam']['id'] == team_id) or \
-                 (winner == 'AWAY_TEAM' and m['awayTeam']['id'] == team_id):
-                form_chars.append('W')
-            else:
-                form_chars.append('L')
-                
+                 (winner == 'AWAY_TEAM' and m['awayTeam']['id'] == team_id): form_chars.append('W')
+            else: form_chars.append('L')
         return ",".join(form_chars) 
 
     def get_team_stats(self, standings: Dict, matches: Dict, team_id: int, table_type: str = 'TOTAL', default_name: str = "Takım") -> Dict:
@@ -308,7 +291,6 @@ class DataManager:
                 if row['team']['id'] == team_id:
                     played = row['playedGames']
                     form = row.get('form', '')
-                    # API'den Logo Çek (Varsa al, yoksa default)
                     crest = row['team'].get('crest', CONSTANTS["DEFAULT_LOGO"])
 
                     if not form and matches:
@@ -376,22 +358,18 @@ def main():
             | Özellik | FREE | PRO ⚡ |
             |---|---|---|
             | **Simülasyon** | 10.000 | **500.000** |
-            | **Form Analizi** | ❌ | ✅ |
+            | **Detaylı Analiz** | ❌ | ✅ |
             """)
 
         st.divider()
         st.subheader("⚙️ Ayarlar")
         
-        use_dynamic = st.checkbox("🎲 Dinamik Simülasyon", value=True, help="Her analizde farklı sonuçlar üretir (Gerçek Monte Carlo).")
+        use_dynamic = st.checkbox("🎲 Dinamik Simülasyon", value=True, help="Gerçek Monte Carlo (Her seferinde farklı).")
         
-        # --- 500K SİMÜLASYON AYARI ---
         max_sim = 500000 if not is_guest else 10000
-        default_sim = 50000 if not is_guest else 1000
+        default_sim = 100000 if not is_guest else 1000
         sim_count = st.slider("Simülasyon Sayısı", 1000, max_sim, default_sim, step=1000)
         
-        if sim_count > 200000:
-            st.caption("⚠️ Yüksek simülasyon (3-5 sn sürebilir).")
-
         st.caption("Takım Form Çarpanları")
         h_att = st.slider("Ev Sahibi", 0.8, 1.2, 1.0)
         a_att = st.slider("Deplasman", 0.8, 1.2, 1.0)
@@ -402,7 +380,7 @@ def main():
             h_miss = st.number_input("Ev Sahibi Eksik", 0, 5, 0)
             a_miss = st.number_input("Deplasman Eksik", 0, 5, 0)
             if h_miss > 5 or a_miss > 5:
-                st.warning("⚠️ 5'ten fazla eksik oyuncu riskli analiz.")
+                st.warning("⚠️ 5'ten fazla eksik kritik hataya yol açabilir.")
 
         st.markdown("---")
         with st.expander("🔐 Admin"):
@@ -448,7 +426,6 @@ def main():
     for m in fixtures.get('matches', []):
         match_date = m['utcDate'][:10]
         match_label = f"{m['homeTeam']['name']} vs {m['awayTeam']['name']} ({match_date})"
-        
         if m['status'] in ['SCHEDULED', 'TIMED']:
             upcoming_matches.append((match_label, m))
         elif m['status'] == 'FINISHED':
@@ -473,11 +450,9 @@ def main():
         
         h_id, a_id = m['homeTeam']['id'], m['awayTeam']['id']
         
-        # --- API LOGO & FORM ---
         h_stats = dm.get_team_stats(standings, fixtures, h_id, 'HOME', m['homeTeam']['name'])
         a_stats = dm.get_team_stats(standings, fixtures, a_id, 'AWAY', m['awayTeam']['name'])
         
-        # API'den gelen logoları kullan
         h_logo = h_stats.get('crest') or CONSTANTS["DEFAULT_LOGO"]
         a_logo = a_stats.get('crest') or CONSTANTS["DEFAULT_LOGO"]
         
@@ -502,24 +477,61 @@ def main():
         log_activity(leagues[sel_league], sel_match_name, h_att, a_att, sim_count, duration)
 
         st.divider()
-        st.info(generate_commentary(h_stats, a_stats, res))
         
+        # --- UI: PURE DATA DASHBOARD ---
         c1, c2, c3 = st.columns(3)
-        c1.markdown(f"<div class='stat-card'><img src='{h_logo}' width='60'><br><div class='stat-lbl'>{h_stats['name']}</div><div class='stat-val' style='color:#3b82f6'>%{res['1x2'][0]:.1f}</div></div>", unsafe_allow_html=True)
-        c2.markdown(f"<div class='stat-card'><br><br><div class='stat-lbl'>BERABERLİK</div><div class='stat-val' style='color:#94a3b8'>%{res['1x2'][1]:.1f}</div></div>", unsafe_allow_html=True)
-        c3.markdown(f"<div class='stat-card'><img src='{a_logo}' width='60'><br><div class='stat-lbl'>{a_stats['name']}</div><div class='stat-val' style='color:#ef4444'>%{res['1x2'][2]:.1f}</div></div>", unsafe_allow_html=True)
+        c1.markdown(f"<div class='stat-card'><img src='{h_logo}' width='60'><br><div class='stat-lbl'>{h_stats['name']}</div><div class='stat-val' style='color:#3b82f6'>%{res['1x2'][0]:.1f}</div><small>±{res['ci']['h']:.1f}</small></div>", unsafe_allow_html=True)
+        c2.markdown(f"<div class='stat-card'><br><br><div class='stat-lbl'>BERABERLİK</div><div class='stat-val' style='color:#94a3b8'>%{res['1x2'][1]:.1f}</div><small>±{res['ci']['d']:.1f}</small></div>", unsafe_allow_html=True)
+        c3.markdown(f"<div class='stat-card'><img src='{a_logo}' width='60'><br><div class='stat-lbl'>{a_stats['name']}</div><div class='stat-val' style='color:#ef4444'>%{res['1x2'][2]:.1f}</div><small>±{res['ci']['a']:.1f}</small></div>", unsafe_allow_html=True)
         
         st.write("")
-        st.progress(res['1x2'][0]/100, text=f"Ev Sahibi Galibiyet İhtimali: %{res['1x2'][0]:.1f}")
+        st.progress(res['1x2'][0]/100, text=f"Ev Sahibi Kazanma Olasılığı: %{res['1x2'][0]:.1f}")
         
-        st.caption(f"📊 Güven Aralığı (Ev): ±%{res['ci']['h']:.1f} | (Dep): ±%{res['ci']['a']:.1f} | ⏱️ Süre: {duration:.3f} sn")
+        # --- GELİŞMİŞ PAZARLAR (PROGRESS BARS) ---
+        st.subheader("📊 Gelişmiş İhtimaller")
+        col_dc, col_goal = st.columns(2)
+        
+        with col_dc:
+            st.markdown("**Çifte Şans**")
+            st.progress(res['dc']['1X'] / 100, text=f"1X (Ev Yenilmez): %{res['dc']['1X']:.1f}")
+            st.progress(res['dc']['X2'] / 100, text=f"X2 (Dep Yenilmez): %{res['dc']['X2']:.1f}")
+            st.progress(res['dc']['12'] / 100, text=f"12 (Beraberlik Yok): %{res['dc']['12']:.1f}")
+            
+        with col_goal:
+            st.markdown("**Gol Pazarı**")
+            st.progress(res['btts'] / 100, text=f"KG Var (BTTS): %{res['btts']:.1f}")
+            st.progress(res['over_25'] / 100, text=f"2.5 Üst: %{res['over_25']:.1f}")
+            st.progress((100-res['over_25']) / 100, text=f"2.5 Alt: %{100-res['over_25']:.1f}")
 
-        st.markdown(f"""
-        ### 📊 Detaylı Analiz 
-        <span style='color:#00ff88; font-weight:bold'>Ev xG: {res['xg'][0]:.2f}</span> - 
-        <span style='color:#ff4b4b; font-weight:bold'>Dep xG: {res['xg'][1]:.2f}</span>
-        """, unsafe_allow_html=True)
-        
+        # --- ENTROPY & KAOS ---
+        st.subheader("🌪️ Maç Kaos Seviyesi (Entropy)")
+        entropy_val = res["entropy"]
+        entropy_norm = min(entropy_val / 2.5, 1.0)
+        st.progress(entropy_norm)
+        st.caption(f"Entropy: {entropy_val:.2f} (Yüksek = Sürprize Açık)")
+
+        # --- GOL FARKI DAĞILIMI (GRAFİK) ---
+        st.subheader("⚖️ Gol Farkı Dağılımı")
+        df_diff = pd.DataFrame({"Fark": list(res["goal_diff"].keys()), "Olasılık": list(res["goal_diff"].values())})
+        fig_diff = px.bar(df_diff, x="Fark", y="Olasılık", text="Olasılık")
+        fig_diff.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
+        fig_diff.update_layout(paper_bgcolor='rgba(0,0,0,0)', font_color='white', height=250, margin=dict(l=0, r=0, t=10, b=0))
+        st.plotly_chart(fig_diff, use_container_width=True)
+
+        # --- xG DAĞILIMI ---
+        st.subheader("📈 xG Dağılımı (Simülasyon)")
+        xg_h, xg_a = res["xg_dist"]
+        fig_xg = go.Figure()
+        fig_xg.add_trace(go.Histogram(x=xg_h, name="Ev xG", opacity=0.6))
+        fig_xg.add_trace(go.Histogram(x=xg_a, name="Dep xG", opacity=0.6))
+        fig_xg.update_layout(barmode='overlay', paper_bgcolor='rgba(0,0,0,0)', font_color='white', height=250, margin=dict(l=0, r=0, t=10, b=0))
+        st.plotly_chart(fig_xg, use_container_width=True)
+
+        # --- ADİL ORANLAR ---
+        with st.expander("📉 Adil Bahis Oranları (Implied Odds)"):
+            odds = {k: round(100/v, 2) if v > 0 else 0 for k, v in zip(["1", "X", "2"], res['1x2'])}
+            st.table(pd.DataFrame([odds]))
+
         h_form_display = " ".join(list(h_stats['form'])) if h_stats['form'] else "Nötr"
         a_form_display = " ".join(list(a_stats['form'])) if a_stats['form'] else "Nötr"
         st.caption(f"📈 Form (Yeni → Eski): {h_stats['name']} [{h_form_display}] - {a_stats['name']} [{a_form_display}]")
