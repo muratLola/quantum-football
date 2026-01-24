@@ -21,13 +21,21 @@ CONFIG = {
     # API Key ve Admin Şifresi secrets.toml üzerinden çekilecek
 }
 
-# Takım Logoları (Görsellik İçin)
+# TAKIM LOGOLARI (Genişletilebilir)
+# ID'leri API'den gelen ID'lerdir.
 TEAM_LOGOS = {
+    # Türkiye
     2054: "https://upload.wikimedia.org/wikipedia/commons/f/f6/Galatasaray_Sports_Club_Logo.png",
     2052: "https://upload.wikimedia.org/wikipedia/tr/8/86/Fenerbah%C3%A7e_SK.png",
     2036: "https://upload.wikimedia.org/wikipedia/commons/2/20/Besiktas_jk.png",
     2061: "https://upload.wikimedia.org/wikipedia/tr/a/ab/Trabzonspor_Amblemi.png",
     2058: "https://upload.wikimedia.org/wikipedia/tr/e/e0/Samsunspor_logo_2.png",
+    # Avrupa Devleri (Örnek)
+    86:  "https://upload.wikimedia.org/wikipedia/tr/f/f4/Real_Madrid.png", # Real Madrid
+    81:  "https://upload.wikimedia.org/wikipedia/tr/9/96/FC_Barcelona.png", # Barcelona
+    65:  "https://upload.wikimedia.org/wikipedia/tr/b/b6/Manchester_City.png", # Man City
+    64:  "https://upload.wikimedia.org/wikipedia/tr/0/03/Liverpool_FC.png", # Liverpool
+    5:   "https://upload.wikimedia.org/wikipedia/commons/1/1b/FC_Bayern_M%C3%BCnchen_logo_%282017%29.svg", # Bayern
 }
 DEFAULT_LOGO = "https://cdn-icons-png.flaticon.com/512/53/53283.png"
 
@@ -49,7 +57,7 @@ except:
     db = None
 
 # -----------------------------------------------------------------------------
-# 2. KULLANICI YÖNETİMİ (MVP SAAS)
+# 2. KULLANICI YÖNETİMİ
 # -----------------------------------------------------------------------------
 query_params = st.query_params
 current_user_email = query_params.get("user_email", "Misafir")
@@ -77,7 +85,7 @@ def log_activity(league, match, h_att, a_att, sim_count):
         print(f"Log Error: {e}") 
 
 def generate_commentary(h_name, a_name, res):
-    """xG, Olasılık ve Over/Under bazlı gelişmiş yorum üretir"""
+    """xG ve Olasılık bazlı gelişmiş yorum üretir"""
     p_h, p_d, p_a = res['1x2']
     xg_h, xg_a = res['xg']
     total_xg = xg_h + xg_a
@@ -132,7 +140,7 @@ class SimulationEngine:
         if params.get('h_missing', 0) > 0: base_xg_h *= (1 - (params['h_missing'] * 0.08))
         if params.get('a_missing', 0) > 0: base_xg_a *= (1 - (params['a_missing'] * 0.08))
 
-        # 2. BELİRSİZLİK (UNCERTAINTY)
+        # 2. BELİRSİZLİK (PRO vs FREE Farkı)
         sigma = 0.05 if params['tier'] == 'PRO' else 0.12
         
         random_factors_h = self.rng.normal(1, sigma, sims)
@@ -142,7 +150,7 @@ class SimulationEngine:
         final_xg_h = np.clip(base_xg_h * random_factors_h, 0.05, None)
         final_xg_a = np.clip(base_xg_a * random_factors_a, 0.05, None)
 
-        # 3. POISSON
+        # 3. POISSON SİMÜLASYONU
         gh_ht = self.rng.poisson(final_xg_h * 0.45)
         ga_ht = self.rng.poisson(final_xg_a * 0.45)
         gh_ft = self.rng.poisson(final_xg_h * 0.55)
@@ -165,7 +173,7 @@ class SimulationEngine:
         p_draw = np.mean(h == a) * 100
         p_away = np.mean(h < a) * 100
 
-        # Skor Matrisi (7x7)
+        # Skor Matrisi
         matrix = np.zeros((7, 7))
         for i in range(7):
             for j in range(7):
@@ -204,31 +212,24 @@ class DataManager:
 
     @st.cache_data(ttl=1800)
     def fetch_data(_self, league_code):
-        standings_data = {"standings": [{"table": []}]}
-        matches_data = {"matches": []}
-        
         try:
-            # 1. Puan Durumu Çek
             r1 = requests.get(f"{CONFIG['API_URL']}/competitions/{league_code}/standings", headers=_self.headers)
-            if r1.status_code == 200:
-                standings_data = r1.json()
-            elif r1.status_code == 429:
-                st.warning("⚠️ API Limiti: Lütfen biraz bekleyin.")
+            if r1.status_code == 429:
+                st.warning("⚠️ API Limiti: Lütfen 30 saniye bekleyin.")
+                return None, None
             
-            # 2. Fikstür Çek
+            standings = r1.json()
+            
             today = datetime.now().strftime("%Y-%m-%d")
-            future = (datetime.now() + timedelta(days=90)).strftime("%Y-%m-%d")
-            
+            future = (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")
             r2 = requests.get(f"{CONFIG['API_URL']}/competitions/{league_code}/matches", 
                               headers=_self.headers, params={"dateFrom": today, "dateTo": future})
-            if r2.status_code == 200:
-                matches_data = r2.json()
-        except:
-            pass
-        
-        # Manuel Süper Kupa Kısmı SİLİNDİ
-        
-        return standings_data, matches_data
+            matches = r2.json() if r2.status_code == 200 else {}
+            
+            return standings, matches
+        except Exception as e:
+            print(f"Data Fetch Error: {e}")
+            return None, None
 
     def get_team_stats(self, standings, team_id, table_type='TOTAL', default_name="Takım"):
         try:
@@ -236,13 +237,11 @@ class DataManager:
             s_list = standings.get('standings', [])
             if not s_list: return {"name": default_name, "id": team_id, "gf": 1.4, "ga": 1.4}
 
-            # İstenen tabloyu bul (TOTAL, HOME, AWAY)
             for item in s_list:
                 if item.get('type') == table_type:
                     target_table = item.get('table', [])
                     break
             
-            # Bulamazsa TOTAL'e dön
             if not target_table and table_type != 'TOTAL':
                 return self.get_team_stats(standings, team_id, 'TOTAL', default_name)
 
@@ -258,7 +257,8 @@ class DataManager:
                         "gf": row['goalsFor'] / played,
                         "ga": row['goalsAgainst'] / played
                     }
-        except:
+        except Exception as e:
+            print(f"Stats Parse Error: {e}")
             pass
         return {"name": default_name, "id": team_id, "gf": 1.4, "ga": 1.4}
 
@@ -299,6 +299,17 @@ def main():
             st.markdown(f"<div class='tier-badge pro-tier'>PLAN: {USER_TIER} ⚡</div>", unsafe_allow_html=True)
             st.success(f"Hoşgeldin,\n{current_user_email}")
         
+        # --- ÜYELİK TABLOSU (YENİ EKLENDİ) ---
+        with st.expander("ℹ️ Üyelik Avantajları", expanded=False):
+            st.markdown("""
+            | Özellik | FREE | PRO ⚡ |
+            |---|---|---|
+            | **Simülasyon** | 5.000 | **250.000** |
+            | **İsabet Oranı** | Standart | **Yüksek** |
+            | **Eksik Oyuncu** | ❌ | ✅ |
+            | **Detaylı xG** | ❌ | ✅ |
+            """)
+
         st.divider()
         st.subheader("⚙️ Ayarlar")
         
@@ -335,56 +346,30 @@ def main():
 
     dm = DataManager(api_key)
     
-    # --- LİG LİSTESİ ---
-    L_MAP = {
-        "Süper Lig (Türkiye)": "TR1",
-        "Premier League (İngiltere)": "PL", 
-        "Championship (İngiltere Alt)": "ELC", 
-        "La Liga (İspanya)": "PD", 
-        "Bundesliga (Almanya)": "BL1", 
-        "Serie A (İtalya)": "SA",
-        "Ligue 1 (Fransa)": "FL1", 
-        "Eredivisie (Hollanda)": "DED",
-        "Primeira Liga (Portekiz)": "PPL",
-        "Série A (Brezilya)": "BSA",
-        "UEFA Şampiyonlar Ligi": "CL",
-        "FIFA Dünya Kupası": "WC",
-        "Avrupa Şampiyonası": "EC"
-    }
-    
     c1, c2 = st.columns([1, 2])
     with c1:
-        sel_league_name = st.selectbox("Lig Seçiniz", list(L_MAP.keys()))
-        sel_league_code = L_MAP[sel_league_name]
+        leagues = {"Süper Lig": "TR1", "Premier League": "PL", "La Liga": "PD", "Bundesliga": "BL1", "Serie A": "SA", "Şampiyonlar Ligi": "CL"}
+        sel_league = st.selectbox("Lig Seçiniz", list(leagues.keys()))
     
-    standings, fixtures = dm.fetch_data(sel_league_code)
-    
-    if not fixtures or "matches" not in fixtures:
-        st.info("Bu ligde planlanmış maç bulunamadı.")
-        st.stop()
+    standings, fixtures = dm.fetch_data(leagues[sel_league])
+    if not fixtures: st.stop()
         
-    # Maçları Listele
-    matches = {}
-    for m in fixtures.get("matches", []):
-        if m["status"] in ["SCHEDULED", "TIMED"]:
-            match_label = f"{m['homeTeam']['name']} vs {m['awayTeam']['name']} ({m['utcDate'][:10]})"
-            matches[match_label] = m
-    
-    if not matches: st.warning("Yakın tarihte oynanacak maç yok."); st.stop()
+    matches = {f"{m['homeTeam']['name']} vs {m['awayTeam']['name']}": m for m in fixtures['matches'] if m['status'] == 'SCHEDULED'}
+    if not matches: st.warning("Planlanmış maç yok."); st.stop()
 
     with c2: sel_match_name = st.selectbox("Maç Seçiniz", list(matches.keys()))
     
     if st.button("🚀 ANALİZİ BAŞLAT", use_container_width=True):
         m = matches[sel_match_name]
-        log_activity(sel_league_name, sel_match_name, h_att, a_att, sim_count)
+        log_activity(sel_league, sel_match_name, h_att, a_att, sim_count)
         
         h_id, a_id = m['homeTeam']['id'], m['awayTeam']['id']
         
-        # --- GÜÇLENDİRİLMİŞ VERİ ÇEKME (HOME/AWAY AYRI) ---
+        # --- GÜÇLENDİRİLMİŞ VERİ ÇEKME ---
         h_stats = dm.get_team_stats(standings, h_id, 'HOME', m['homeTeam']['name'])
         a_stats = dm.get_team_stats(standings, a_id, 'AWAY', m['awayTeam']['name'])
         
-        # Logoları Ayarla
+        # --- LOGO ÇEKME MANTIĞI (DÜZELTİLDİ) ---
         h_logo = TEAM_LOGOS.get(h_stats['id'], DEFAULT_LOGO)
         a_logo = TEAM_LOGOS.get(a_stats['id'], DEFAULT_LOGO)
         
@@ -407,15 +392,15 @@ def main():
         st.divider()
         st.info(generate_commentary(h_stats['name'], a_stats['name'], res))
         
+        # --- KARTLARDA LOGO KULLANIMI (HTML İLE) ---
         c1, c2, c3 = st.columns(3)
-        c1.markdown(f"<div class='stat-card'><img src='{h_logo}' width='50'><br><div class='stat-lbl'>{h_stats['name']}</div><div class='stat-val' style='color:#3b82f6'>%{res['1x2'][0]:.1f}</div></div>", unsafe_allow_html=True)
-        c2.markdown(f"<div class='stat-card'><br><div class='stat-lbl'>BERABERLİK</div><div class='stat-val' style='color:#94a3b8'>%{res['1x2'][1]:.1f}</div></div>", unsafe_allow_html=True)
-        c3.markdown(f"<div class='stat-card'><img src='{a_logo}' width='50'><br><div class='stat-lbl'>{a_stats['name']}</div><div class='stat-val' style='color:#ef4444'>%{res['1x2'][2]:.1f}</div></div>", unsafe_allow_html=True)
+        c1.markdown(f"<div class='stat-card'><img src='{h_logo}' width='60'><br><div class='stat-lbl'>{h_stats['name']}</div><div class='stat-val' style='color:#3b82f6'>%{res['1x2'][0]:.1f}</div></div>", unsafe_allow_html=True)
+        c2.markdown(f"<div class='stat-card'><br><br><div class='stat-lbl'>BERABERLİK</div><div class='stat-val' style='color:#94a3b8'>%{res['1x2'][1]:.1f}</div></div>", unsafe_allow_html=True)
+        c3.markdown(f"<div class='stat-card'><img src='{a_logo}' width='60'><br><div class='stat-lbl'>{a_stats['name']}</div><div class='stat-val' style='color:#ef4444'>%{res['1x2'][2]:.1f}</div></div>", unsafe_allow_html=True)
         
         st.write("")
         st.progress(res['1x2'][0]/100, text=f"Ev Sahibi Galibiyet İhtimali: %{res['1x2'][0]:.1f}")
 
-        # Renkli xG Gösterimi
         st.markdown(f"""
         ### 📊 Detaylı Analiz 
         <span style='color:#00ff88; font-weight:bold'>Ev xG: {res['xg'][0]:.2f}</span> - 
