@@ -9,7 +9,7 @@ import time
 import logging
 from typing import Dict, Tuple, List, Any, Optional
 
-# --- LOGGING AYARLARI (ENTERPRISE) ---
+# --- LOGGING AYARLARI ---
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.ERROR)
 logger = logging.getLogger(__name__)
 
@@ -27,9 +27,9 @@ CONSTANTS = {
     "WIN_BOOST": 0.04,
     "DRAW_BOOST": 0.01,
     "LOSS_PENALTY": -0.03,
-    "MISSING_PLAYER_IMPACT": 0.08,
-    "CACHE_TTL": 1800, # 30 Dakika
-    "FORM_WEIGHTS": [1.5, 1.25, 1.0, 0.75, 0.5], # Yeni -> Eski (Exponential Decay)
+    "MISSING_PLAYER_BASE_IMPACT": 0.08,
+    "CACHE_TTL": 1800, 
+    "FORM_WEIGHTS": [1.5, 1.25, 1.0, 0.75, 0.5],
     "DEFAULT_LOGO": "https://cdn-icons-png.flaticon.com/512/53/53283.png"
 }
 
@@ -75,7 +75,7 @@ def log_activity(league: str, match: str, h_att: float, a_att: float, sim_count:
         logger.error(f"Firestore Log Error: {e}")
 
 # -----------------------------------------------------------------------------
-# 3. SİMÜLASYON MOTORU (RESEARCH GRADE)
+# 3. SİMÜLASYON MOTORU (THE FINAL TRUTH)
 # -----------------------------------------------------------------------------
 class SimulationEngine:
     def __init__(self, use_fixed_seed: bool = False):
@@ -117,24 +117,35 @@ class SimulationEngine:
 
         base_xg_h *= CONSTANTS["HOME_ADVANTAGE"]
 
+        # Convex Eksik Oyuncu Etkisi
         if params.get('h_missing', 0) > 0: 
-            base_xg_h *= (1 - (params['h_missing'] * CONSTANTS["MISSING_PLAYER_IMPACT"]))
+            impact_h = 1 - (1 - CONSTANTS["MISSING_PLAYER_BASE_IMPACT"]) ** params['h_missing']
+            base_xg_h *= (1 - impact_h)
+        
         if params.get('a_missing', 0) > 0: 
-            base_xg_a *= (1 - (params['a_missing'] * CONSTANTS["MISSING_PLAYER_IMPACT"]))
+            impact_a = 1 - (1 - CONSTANTS["MISSING_PLAYER_BASE_IMPACT"]) ** params['a_missing']
+            base_xg_a *= (1 - impact_a)
 
         sigma = 0.05 if params['tier'] == 'PRO' else 0.12
         
-        # Monte Carlo Randomness
         random_factors_h = self.rng.normal(1, sigma, sims)
         random_factors_a = self.rng.normal(1, sigma, sims)
         
-        final_xg_h = np.clip(base_xg_h * random_factors_h, 0.05, None)
-        final_xg_a = np.clip(base_xg_a * random_factors_a, 0.05, None)
+        # Clip Upper Bound (12 gol) - Grok Önerisi
+        final_xg_h = np.clip(base_xg_h * random_factors_h, 0.05, 12.0)
+        final_xg_a = np.clip(base_xg_a * random_factors_a, 0.05, 12.0)
 
-        gh_ht = self.rng.poisson(final_xg_h * 0.45)
-        ga_ht = self.rng.poisson(final_xg_a * 0.45)
-        gh_ft = self.rng.poisson(final_xg_h * 0.55)
-        ga_ft = self.rng.poisson(final_xg_a * 0.55)
+        # --- GAMMA-POISSON (VEKTÖREL HIZLANDIRILMIŞ) ---
+        def simulate_goals(xg_array):
+            alpha = 10.0 # Dispersion
+            # Shape parametresi vektörel olabilir (NumPy destekler)
+            gamma_variate = self.rng.gamma(shape=xg_array * alpha, scale=1/alpha)
+            return self.rng.poisson(gamma_variate)
+
+        gh_ht = simulate_goals(final_xg_h * 0.45)
+        ga_ht = simulate_goals(final_xg_a * 0.45)
+        gh_ft = simulate_goals(final_xg_h * 0.55)
+        ga_ft = simulate_goals(final_xg_a * 0.55)
 
         total_h = gh_ht + gh_ft
         total_a = ga_ht + ga_ft
@@ -142,20 +153,19 @@ class SimulationEngine:
         return {
             "h": total_h, "a": total_a,
             "ht": (gh_ht, ga_ht), "ft": (total_h, total_a),
-            "xg_dist": (final_xg_h, final_xg_a), # Dağılım analizi için
+            "xg_dist": (final_xg_h, final_xg_a),
             "sims": sims
         }
 
     def analyze_results(self, data: Dict) -> Dict:
         h, a = data["h"], data["a"]
+        ht_h, ht_a = data["ht"]
         sims = data["sims"]
 
-        # --- TEMEL OLASILIKLAR ---
         p_home = np.mean(h > a) * 100
         p_draw = np.mean(h == a) * 100
         p_away = np.mean(h < a) * 100
 
-        # --- GÜVEN ARALIĞI ---
         def calc_ci(p, n):
             return 1.96 * np.sqrt((p/100 * (1 - p/100)) / n) * 100
         
@@ -165,7 +175,41 @@ class SimulationEngine:
             "a": calc_ci(p_away, sims)
         }
 
-        # --- GOL FARKI DAĞILIMI (Research Grade) ---
+        # Skor Matrisi (6+ Bucket)
+        matrix = np.zeros((7, 7))
+        h_clipped = np.clip(h, 0, 6)
+        a_clipped = np.clip(a, 0, 6)
+        for i in range(7):
+            for j in range(7):
+                matrix[i, j] = np.sum((h_clipped == i) & (a_clipped == j)) / sims * 100
+
+        scores = [f"{i}-{j}" for i, j in zip(h, a)]
+        unique, counts = np.unique(scores, return_counts=True)
+        top_scores = sorted(zip(unique, counts/sims*100), key=lambda x: x[1], reverse=True)[:10]
+
+        # HT/FT Hesaplama
+        ht_res = np.where(ht_h > ht_a, 1, np.where(ht_h < ht_a, 2, 0))
+        ft_res = np.where(h > a, 1, np.where(h < a, 2, 0))
+        
+        htft_probs = {}
+        outcome_labels = {1: "1", 0: "X", 2: "2"}
+        for ht in [1, 0, 2]:
+            for ft in [1, 0, 2]:
+                mask = (ht_res == ht) & (ft_res == ft)
+                htft_probs[f"{outcome_labels[ht]}/{outcome_labels[ft]}"] = np.mean(mask) * 100
+
+        # Bilimsel Entropy (Düzeltildi)
+        flat_matrix = matrix.flatten()
+        flat_matrix = flat_matrix[flat_matrix > 0] / 100
+        raw_entropy = -np.sum(flat_matrix * np.log(flat_matrix))
+        max_entropy = np.log(len(flat_matrix)) if len(flat_matrix) > 0 else 1
+        normalized_entropy = (raw_entropy / max_entropy) # 0-1 arası
+
+        # Pazarlar
+        dc = {"1X": p_home + p_draw, "X2": p_away + p_draw, "12": p_home + p_away}
+        btts_yes = np.mean((h > 0) & (a > 0)) * 100
+        over_25 = np.mean((h + a) > 2.5) * 100
+        
         goal_diff = h - a
         diff_bins = {
             "≤-3": np.mean(goal_diff <= -3) * 100,
@@ -177,43 +221,14 @@ class SimulationEngine:
             "≥+3": np.mean(goal_diff >= 3) * 100,
         }
 
-        # --- SKOR MATRİSİ (Bucket) ---
-        matrix = np.zeros((7, 7))
-        h_clipped = np.clip(h, 0, 6)
-        a_clipped = np.clip(a, 0, 6)
-        for i in range(7):
-            for j in range(7):
-                matrix[i, j] = np.sum((h_clipped == i) & (a_clipped == j)) / sims * 100
-
-        # --- ENTROPY (Kaos Skoru) ---
-        flat_matrix = matrix.flatten()
-        flat_matrix = flat_matrix[flat_matrix > 0] / 100 # Normalize
-        entropy = -np.sum(flat_matrix * np.log(flat_matrix))
-
-        # --- GELİŞMİŞ PAZARLAR (DC, BTTS, OVER) ---
-        # Çifte Şans
-        dc = {
-            "1X": p_home + p_draw,
-            "X2": p_away + p_draw,
-            "12": p_home + p_away
-        }
-        # BTTS (Kg Var)
-        btts_yes = np.mean((h > 0) & (a > 0)) * 100
-        # 2.5 Üst
-        over_25 = np.mean((h + a) > 2.5) * 100
-
-        # En Olası Skorlar
-        scores = [f"{i}-{j}" for i, j in zip(h, a)]
-        unique, counts = np.unique(scores, return_counts=True)
-        top_scores = sorted(zip(unique, counts/sims*100), key=lambda x: x[1], reverse=True)[:10]
-
         return {
             "1x2": [p_home, p_draw, p_away],
             "ci": ci,
             "matrix": matrix,
             "top_scores": top_scores,
+            "htft": htft_probs,
             "goal_diff": diff_bins,
-            "entropy": entropy,
+            "entropy": normalized_entropy,
             "dc": dc,
             "btts": btts_yes,
             "over_25": over_25,
@@ -358,7 +373,7 @@ def main():
             | Özellik | FREE | PRO ⚡ |
             |---|---|---|
             | **Simülasyon** | 10.000 | **500.000** |
-            | **Detaylı Analiz** | ❌ | ✅ |
+            | **Form Analizi** | ❌ | ✅ |
             """)
 
         st.divider()
@@ -487,7 +502,6 @@ def main():
         st.write("")
         st.progress(res['1x2'][0]/100, text=f"Ev Sahibi Kazanma Olasılığı: %{res['1x2'][0]:.1f}")
         
-        # --- GELİŞMİŞ PAZARLAR (PROGRESS BARS) ---
         st.subheader("📊 Gelişmiş İhtimaller")
         col_dc, col_goal = st.columns(2)
         
@@ -501,16 +515,17 @@ def main():
             st.markdown("**Gol Pazarı**")
             st.progress(res['btts'] / 100, text=f"KG Var (BTTS): %{res['btts']:.1f}")
             st.progress(res['over_25'] / 100, text=f"2.5 Üst: %{res['over_25']:.1f}")
-            st.progress((100-res['over_25']) / 100, text=f"2.5 Alt: %{100-res['over_25']:.1f}")
+            
+        st.subheader("⏱️ İlk Yarı / Maç Sonucu (HT/FT)")
+        htft_df = pd.DataFrame(list(res['htft'].items()), columns=['Tercih', 'Olasılık'])
+        htft_df = htft_df.sort_values('Olasılık', ascending=False).head(5)
+        st.dataframe(htft_df.set_index('Tercih'), use_container_width=True)
 
-        # --- ENTROPY & KAOS ---
         st.subheader("🌪️ Maç Kaos Seviyesi (Entropy)")
         entropy_val = res["entropy"]
-        entropy_norm = min(entropy_val / 2.5, 1.0)
-        st.progress(entropy_norm)
-        st.caption(f"Entropy: {entropy_val:.2f} (Yüksek = Sürprize Açık)")
+        st.progress(min(entropy_val, 1.0)) # 0-1 arası zaten normalize
+        st.caption(f"Entropy: {entropy_val:.3f} (Yüksek = Sürprize Açık)")
 
-        # --- GOL FARKI DAĞILIMI (GRAFİK) ---
         st.subheader("⚖️ Gol Farkı Dağılımı")
         df_diff = pd.DataFrame({"Fark": list(res["goal_diff"].keys()), "Olasılık": list(res["goal_diff"].values())})
         fig_diff = px.bar(df_diff, x="Fark", y="Olasılık", text="Olasılık")
@@ -518,7 +533,6 @@ def main():
         fig_diff.update_layout(paper_bgcolor='rgba(0,0,0,0)', font_color='white', height=250, margin=dict(l=0, r=0, t=10, b=0))
         st.plotly_chart(fig_diff, use_container_width=True)
 
-        # --- xG DAĞILIMI ---
         st.subheader("📈 xG Dağılımı (Simülasyon)")
         xg_h, xg_a = res["xg_dist"]
         fig_xg = go.Figure()
@@ -527,7 +541,6 @@ def main():
         fig_xg.update_layout(barmode='overlay', paper_bgcolor='rgba(0,0,0,0)', font_color='white', height=250, margin=dict(l=0, r=0, t=10, b=0))
         st.plotly_chart(fig_xg, use_container_width=True)
 
-        # --- ADİL ORANLAR ---
         with st.expander("📉 Adil Bahis Oranları (Implied Odds)"):
             odds = {k: round(100/v, 2) if v > 0 else 0 for k, v in zip(["1", "X", "2"], res['1x2'])}
             st.table(pd.DataFrame([odds]))
@@ -536,7 +549,7 @@ def main():
         a_form_display = " ".join(list(a_stats['form'])) if a_stats['form'] else "Nötr"
         st.caption(f"📈 Form (Yeni → Eski): {h_stats['name']} [{h_form_display}] - {a_stats['name']} [{a_form_display}]")
 
-        tab1, tab2, tab3 = st.tabs(["Skor Matrisi", "En Olası Skorlar", "HT/FT"])
+        tab1, tab2 = st.tabs(["Skor Matrisi", "En Olası Skorlar"])
         
         with tab1:
             fig = go.Figure(data=go.Heatmap(
@@ -555,15 +568,6 @@ def main():
         with tab2:
             for s, p in res['top_scores']:
                 st.progress(p/100, text=f"Skor {s} - Olasılık: %{p:.1f}")
-        
-        with tab3:
-            st.caption("İlk Yarı / Maç Sonucu Olasılıkları (> %5)")
-            htft_data = [{"Tercih": k, "Olasılık": v} for k, v in res['htft'].items() if v > 5]
-            if htft_data:
-                df_htft = pd.DataFrame(htft_data).sort_values("Olasılık", ascending=False)
-                st.bar_chart(df_htft.set_index("Tercih"))
-            else:
-                st.write("Belirgin bir olasılık bulunamadı.")
 
 if __name__ == "__main__":
     main()
