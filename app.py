@@ -6,8 +6,8 @@ import plotly.graph_objects as go
 from datetime import datetime
 import logging
 import io
-import os # Eklendi
-import urllib.request # Eklendi
+import os
+import urllib.request
 from fpdf import FPDF
 from typing import Dict, List, Any
 
@@ -79,7 +79,7 @@ def save_prediction(match_id, match_name, match_date, league, probs, params, use
     except: pass
 
 # -----------------------------------------------------------------------------
-# 3. ANALİZ MOTORU
+# 3. ANALİZ VE KARAR MOTORU (GÜNCELLENDİ)
 # -----------------------------------------------------------------------------
 class AnalyticsEngine:
     def __init__(self): self.rng = np.random.default_rng()
@@ -142,21 +142,56 @@ class AnalyticsEngine:
             "htft": htft.to_dict(), "most_likely": most_likely_score
         }
 
+    # --- KARAR MOTORU (YENİ) ---
+    def decision_engine(self, res, h_stats, a_stats, params):
+        decisions = {"safe": [], "risky": [], "avoid": [], "reasons": []}
+        
+        # 1. Güven Skoru Hesapla (Volatiliteye göre)
+        # Eğer bir olasılık çok yüksekse güven artar, hepsi yakınsa düşer.
+        probs = res['1x2']
+        std_dev = np.std(probs) # Standart sapma
+        confidence_score = min(int(std_dev * 2.5 + 40), 99) # Basit bir scaling
+        
+        # 2. Seçim Mantığı
+        # KG VAR
+        if res['btts'] >= 60: decisions['safe'].append(f"KG Var (%{res['btts']:.1f})")
+        elif res['btts'] >= 52: decisions['risky'].append(f"KG Var (%{res['btts']:.1f})")
+        
+        # 2.5 ÜST
+        if res['over_25'] >= 60: decisions['safe'].append(f"2.5 Üst (%{res['over_25']:.1f})")
+        elif res['over_25'] >= 52: decisions['risky'].append(f"2.5 Üst (%{res['over_25']:.1f})")
+        
+        # MAÇ SONUCU
+        winner_prob = max(probs)
+        winner_idx = probs.index(winner_prob)
+        labels = ["Ev Sahibi", "Beraberlik", "Deplasman"]
+        
+        if winner_prob >= 65: 
+            decisions['safe'].append(f"{labels[winner_idx]} Kazanır (%{winner_prob:.1f})")
+            decisions['reasons'].append(f"Model {labels[winner_idx]} galibiyetinden çok emin.")
+        elif winner_prob >= 50:
+            decisions['risky'].append(f"{labels[winner_idx]} Kazanır (%{winner_prob:.1f})")
+        else:
+            decisions['avoid'].append("Maç Sonucu (1X2)")
+            decisions['reasons'].append("Maç sonucu belirsizliği yüksek (Kaotik).")
+
+        # 3. Nedenler (Explainability)
+        if h_stats['gf'] > 2.0: decisions['reasons'].append("Ev sahibi hücum gücü çok yüksek.")
+        if a_stats['ga'] > 1.8: decisions['reasons'].append("Deplasman savunması kırılgan.")
+        if params['hk'] or params['ak']: decisions['reasons'].append("Kritik eksikler simülasyonu etkiledi.")
+        if confidence_score < 50: decisions['reasons'].append("Veri seti tutarsız, volatilite yüksek.")
+
+        return decisions, confidence_score
+
 # -----------------------------------------------------------------------------
-# 4. GÖRSELLEŞTİRME & PDF (TÜRKÇE KARAKTER DÜZELTMESİ)
+# 4. GÖRSELLEŞTİRME & PDF
 # -----------------------------------------------------------------------------
 def check_font():
-    """Türkçe karakter destekleyen fontu indirir"""
     font_path = "DejaVuSans.ttf"
     if not os.path.exists(font_path):
-        # Güvenilir bir kaynaktan fontu indir
-        url = "https://github.com/google/fonts/raw/main/ofl/notosans/NotoSans-Regular.ttf" 
-        # Not: FPDF uyumluluğu için DejaVuSans daha garantidir, onu çekelim:
         url = "https://github.com/coreybutler/fonts/raw/master/ttf/DejaVuSans.ttf"
-        try:
-            urllib.request.urlretrieve(url, font_path)
-        except:
-            pass
+        try: urllib.request.urlretrieve(url, font_path)
+        except: pass
     return font_path
 
 class DataManager:
@@ -184,33 +219,33 @@ def create_radar(h_stats, a_stats, avg):
     fig.update_layout(polar=dict(bgcolor='#1e2129', radialaxis=dict(visible=True, range=[0,100])), showlegend=True, paper_bgcolor='rgba(0,0,0,0)', font_color='white', margin=dict(t=30, b=30))
     return fig
 
-def create_pdf(h_stats, a_stats, res, radar):
-    font_path = check_font() # Fontu kontrol et/indir
-    
-    pdf = FPDF()
-    pdf.add_page()
-    
-    # Türkçe fontu sisteme tanıt (Eğer dosya indiyse)
-    if os.path.exists(font_path):
-        pdf.add_font("DejaVu", "", font_path)
-        pdf.set_font("DejaVu", "", 16)
-    else:
-        pdf.set_font("Arial", "B", 16) # Yedek (Türkçe bozuk çıkar ama çalışır)
+def create_pdf(h_stats, a_stats, res, radar, decisions):
+    font_path = check_font()
+    pdf = FPDF(); pdf.add_page()
+    if os.path.exists(font_path): pdf.add_font("DejaVu", "", font_path); pdf.set_font("DejaVu", "", 16)
+    else: pdf.set_font("Arial", "B", 16)
 
-    pdf.cell(0,10,"QUANTUM FOOTBALL",ln=True,align="C")
+    pdf.cell(0,10,"QUANTUM FOOTBALL - KARAR RAPORU",ln=True,align="C")
+    if os.path.exists(font_path): pdf.set_font("DejaVu", "", 12)
+    else: pdf.set_font("Arial", "", 12)
     
-    if os.path.exists(font_path):
-        pdf.set_font("DejaVu", "", 12)
-    else:
-        pdf.set_font("Arial", "", 12)
-        
-    pdf.ln(10)
-    pdf.cell(0,10,f"{h_stats['name']} vs {a_stats['name']}",ln=True)
+    pdf.ln(5)
+    pdf.cell(0,10,f"Mac: {h_stats['name']} vs {a_stats['name']}",ln=True)
+    pdf.ln(5)
+    
+    pdf.set_font(style='B')
+    pdf.cell(0,10,"MODEL ONERILERI:", ln=True)
+    pdf.set_font(style='')
+    
+    if decisions['safe']: pdf.cell(0,10,f"GUVENLI: {', '.join(decisions['safe'])}", ln=True)
+    if decisions['risky']: pdf.cell(0,10,f"RISKLI (DEGERLI): {', '.join(decisions['risky'])}", ln=True)
+    
+    pdf.ln(5)
     pdf.cell(0,10,f"Ev: %{res['1x2'][0]:.1f} | X: %{res['1x2'][1]:.1f} | Dep: %{res['1x2'][2]:.1f}",ln=True)
-    pdf.cell(0,10,f"KG Var: %{res['btts']:.1f} | 2.5 Ust: %{res['over_25']:.1f}",ln=True)
+    
     try:
         img = io.BytesIO(); radar.write_image(img, format='png', scale=2); img.seek(0)
-        pdf.image(img, x=10, y=80, w=190)
+        pdf.image(img, x=10, y=100, w=190)
     except: pass
     return bytes(pdf.output(dest='S'))
 
@@ -222,6 +257,10 @@ def main():
         .stApp {background-color: #0e1117; color: #fff;}
         .stat-card {background: #1e2129; padding: 15px; border-radius: 12px; text-align: center; border: 1px solid #333;}
         .big-num {font-size: 28px; font-weight: bold; color: #00ff88;}
+        .decision-box {padding: 15px; border-radius: 10px; margin-bottom: 10px; border-left: 5px solid;}
+        .safe {background: rgba(0, 255, 136, 0.1); border-color: #00ff88;}
+        .risky {background: rgba(255, 204, 0, 0.1); border-color: #ffcc00;}
+        .avoid {background: rgba(255, 51, 51, 0.1); border-color: #ff3333;}
         div.stButton > button:first-child {
             background-color: #00ff88; color: #0e1117; font-size: 18px; font-weight: bold;
             border: none; padding: 12px 30px; border-radius: 8px; transition: 0.3s;
@@ -242,10 +281,8 @@ def main():
     with k1: st.metric("🎯 AI Doğruluk", "%74.2", "v7.3")
     with k2: st.metric("🧠 Simülasyon", "50K+", "Maç Başı")
     with k3: st.metric("🌍 Kapsam", "8 Lig", "Global")
-    
     display_name = current_user.split('@')[0] if '@' in current_user else current_user
     with k4: st.metric("👤 Kullanıcı", display_name, "Aktif")
-    
     st.markdown("---")
 
     api_key = st.secrets.get("FOOTBALL_API_KEY")
@@ -297,11 +334,17 @@ def main():
         params = {"sim_count": 500000, "t_h": t_h, "t_a": t_a, "weather": weather, 
                   "hk": hk, "hgk": hgk, "ak": ak, "agk": agk}
         
-        with st.spinner("Kuantum motoru çalışıyor... (500.000 Senaryo)"):
+        with st.spinner("Kuantum motoru çalışıyor... Karar mekanizması devreye giriyor..."):
             h_g, a_g, xg = engine.run_simulation(h_stats, a_stats, avg, params, 1.08)
             res = engine.analyze(h_g, a_g, 500000)
             
-            st.session_state['results'] = {'res': res, 'h_stats': h_stats, 'a_stats': a_stats, 'avg': avg, 'match_name': match_name}
+            # KARAR MOTORUNU ÇALIŞTIR
+            decisions, confidence = engine.decision_engine(res, h_stats, a_stats, params)
+            
+            st.session_state['results'] = {
+                'res': res, 'h_stats': h_stats, 'a_stats': a_stats, 'avg': avg, 
+                'match_name': match_name, 'decisions': decisions, 'confidence': confidence
+            }
             save_prediction(m['id'], match_name, m['utcDate'], lid, res['1x2'], params, current_user)
 
     if 'results' in st.session_state and st.session_state['results']:
@@ -309,6 +352,8 @@ def main():
         res = data['res']
         h_stats = data['h_stats']
         a_stats = data['a_stats']
+        decisions = data['decisions']
+        confidence = data['confidence']
         
         st.divider()
         c1, c2, c3 = st.columns(3)
@@ -317,8 +362,52 @@ def main():
         c3.markdown(f"<div class='stat-card'><img src='{a_stats['crest']}' width='60'><br><b>{a_stats['name']}</b><br><span class='big-num' style='color:#ff4444'>%{res['1x2'][2]:.1f}</span></div>", unsafe_allow_html=True)
         st.progress(res['1x2'][0]/100)
         
-        t1, t2, t3, t4, t5 = st.tabs(["📊 Analitik", "⚖️ Güç Dengesi", "🌊 Simülasyon", "🔥 Skor Matrisi", "⏱️ İY / MS"])
+        # --- YENİ TAB YAPISI (KARAR MOTORU EKLENDİ) ---
+        t_decision, t1, t2, t3, t4, t5 = st.tabs(["🧠 Karar Motoru", "📊 Analitik", "⚖️ Güç Dengesi", "🌊 Simülasyon", "🔥 Skor Matrisi", "⏱️ İY / MS"])
         
+        # 0. SEKME: KARAR MOTORU (YENİ)
+        with t_decision:
+            d1, d2 = st.columns([2, 1])
+            with d1:
+                st.subheader("🤖 Yapay Zeka Önerileri")
+                
+                if not decisions['safe'] and not decisions['risky']:
+                    st.warning("Bu maç çok belirsiz. Model net bir fırsat bulamadı.")
+                
+                if decisions['safe']:
+                    st.markdown(f"""<div class='decision-box safe'>
+                        <h3 style='margin:0; color:#00ff88'>✅ GÜVENLİ LİMAN</h3>
+                        <p style='margin:0'>Modelin en yüksek olasılıkla öngördüğü sonuçlar:</p>
+                        <ul>{''.join([f'<li><b>{x}</b></li>' for x in decisions['safe']])}</ul>
+                    </div>""", unsafe_allow_html=True)
+                
+                if decisions['risky']:
+                    st.markdown(f"""<div class='decision-box risky'>
+                        <h3 style='margin:0; color:#ffcc00'>⚠️ DEĞERLİ RİSK</h3>
+                        <p style='margin:0'>Olasılık sınırda ama denemeye değer:</p>
+                        <ul>{''.join([f'<li><b>{x}</b></li>' for x in decisions['risky']])}</ul>
+                    </div>""", unsafe_allow_html=True)
+                    
+                if decisions['avoid']:
+                     st.markdown(f"""<div class='decision-box avoid'>
+                        <h3 style='margin:0; color:#ff3333'>⛔ UZAK DUR</h3>
+                        <p style='margin:0'>Kaotik dağılım var:</p>
+                        <ul>{''.join([f'<li>{x}</li>' for x in decisions['avoid']])}</ul>
+                    </div>""", unsafe_allow_html=True)
+
+            with d2:
+                st.subheader("🛡️ Model Güveni")
+                st.metric("Güven Skoru", f"{confidence}/100")
+                st.progress(confidence/100)
+                if confidence > 80: st.success("Model bu maçtan çok emin.")
+                elif confidence > 50: st.warning("Standart sapma normal.")
+                else: st.error("Yüksek Volatilite! Sürpriz açık.")
+                
+                st.markdown("---")
+                st.markdown("**🧬 Neden Bu Karar?**")
+                for r in decisions['reasons']:
+                    st.caption(f"• {r}")
+
         with t1:
             col_a, col_b = st.columns(2)
             with col_a:
@@ -373,7 +462,7 @@ def main():
             df_htft = pd.DataFrame(list(res['htft'].items()), columns=['Tahmin', 'Olasılık %']).sort_values('Olasılık %', ascending=False).head(7)
             st.table(df_htft.set_index('Tahmin'))
 
-        pdf_bytes = create_pdf(h_stats, a_stats, res, create_radar(h_stats, a_stats, data['avg']))
+        pdf_bytes = create_pdf(h_stats, a_stats, res, create_radar(h_stats, a_stats, data['avg']), decisions)
         st.download_button("📄 PDF Raporu İndir", pdf_bytes, "Analiz.pdf", "application/pdf", use_container_width=True)
 
     st.divider()
