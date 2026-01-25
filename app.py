@@ -6,6 +6,8 @@ import plotly.graph_objects as go
 from datetime import datetime
 import logging
 import io
+import os # Eklendi
+import urllib.request # Eklendi
 from fpdf import FPDF
 from typing import Dict, List, Any
 
@@ -32,22 +34,18 @@ try: db = firestore.client()
 except: db = None
 
 # -----------------------------------------------------------------------------
-# 1. YARDIMCI FONKSİYONLAR (GİZLİLİK & FORMAT)
+# 1. YARDIMCI FONKSİYONLAR
 # -----------------------------------------------------------------------------
-# Web sitesinden gelen parametreleri al
 query_params = st.query_params
 current_user = query_params.get("user_email", "Misafir_User")
 
 def mask_user(email):
-    """E-postayı gizler: ahmet@gmail.com -> ah***@gmail.com"""
     if not email or "@" not in email: return "Misafir"
     try:
         user, domain = email.split('@')
-        if len(user) > 2:
-            return f"{user[:2]}***@{domain}"
+        if len(user) > 2: return f"{user[:2]}***@{domain}"
         return f"{user[0]}***@{domain}"
-    except:
-        return "Gizli Kullanıcı"
+    except: return "Gizli Kullanıcı"
 
 CONSTANTS = {
     "API_URL": "https://api.football-data.org/v4",
@@ -131,7 +129,6 @@ class AnalyticsEngine:
         btts = np.mean((h > 0) & (a > 0)) * 100
         over_25 = np.mean((h + a) > 2.5) * 100
         
-        # En olası skor tahmini
         max_idx = np.unravel_index(np.argmax(m, axis=None), m.shape)
         most_likely_score = f"{max_idx[0]}-{max_idx[1]}"
         
@@ -141,17 +138,27 @@ class AnalyticsEngine:
         htft = pd.Series([f"{x}/{y}" for x,y in zip(res_ht, res_ft)]).value_counts(normalize=True)*100
 
         return {
-            "1x2": [p1, px, p2], 
-            "matrix": m, 
-            "btts": btts, 
-            "over_25": over_25, 
-            "htft": htft.to_dict(),
-            "most_likely": most_likely_score
+            "1x2": [p1, px, p2], "matrix": m, "btts": btts, "over_25": over_25, 
+            "htft": htft.to_dict(), "most_likely": most_likely_score
         }
 
 # -----------------------------------------------------------------------------
-# 4. GÖRSELLEŞTİRME & PDF
+# 4. GÖRSELLEŞTİRME & PDF (TÜRKÇE KARAKTER DÜZELTMESİ)
 # -----------------------------------------------------------------------------
+def check_font():
+    """Türkçe karakter destekleyen fontu indirir"""
+    font_path = "DejaVuSans.ttf"
+    if not os.path.exists(font_path):
+        # Güvenilir bir kaynaktan fontu indir
+        url = "https://github.com/google/fonts/raw/main/ofl/notosans/NotoSans-Regular.ttf" 
+        # Not: FPDF uyumluluğu için DejaVuSans daha garantidir, onu çekelim:
+        url = "https://github.com/coreybutler/fonts/raw/master/ttf/DejaVuSans.ttf"
+        try:
+            urllib.request.urlretrieve(url, font_path)
+        except:
+            pass
+    return font_path
+
 class DataManager:
     def __init__(self, key): self.headers = {"X-Auth-Token": key}
     @st.cache_data(ttl=3600)
@@ -178,9 +185,26 @@ def create_radar(h_stats, a_stats, avg):
     return fig
 
 def create_pdf(h_stats, a_stats, res, radar):
-    pdf = FPDF(); pdf.add_page(); pdf.set_font("Arial",'B',16)
+    font_path = check_font() # Fontu kontrol et/indir
+    
+    pdf = FPDF()
+    pdf.add_page()
+    
+    # Türkçe fontu sisteme tanıt (Eğer dosya indiyse)
+    if os.path.exists(font_path):
+        pdf.add_font("DejaVu", "", font_path)
+        pdf.set_font("DejaVu", "", 16)
+    else:
+        pdf.set_font("Arial", "B", 16) # Yedek (Türkçe bozuk çıkar ama çalışır)
+
     pdf.cell(0,10,"QUANTUM FOOTBALL",ln=True,align="C")
-    pdf.set_font("Arial",'',12); pdf.ln(10)
+    
+    if os.path.exists(font_path):
+        pdf.set_font("DejaVu", "", 12)
+    else:
+        pdf.set_font("Arial", "", 12)
+        
+    pdf.ln(10)
     pdf.cell(0,10,f"{h_stats['name']} vs {a_stats['name']}",ln=True)
     pdf.cell(0,10,f"Ev: %{res['1x2'][0]:.1f} | X: %{res['1x2'][1]:.1f} | Dep: %{res['1x2'][2]:.1f}",ln=True)
     pdf.cell(0,10,f"KG Var: %{res['btts']:.1f} | 2.5 Ust: %{res['over_25']:.1f}",ln=True)
@@ -207,7 +231,6 @@ def main():
         }
     </style>""", unsafe_allow_html=True)
 
-    # HERO & KPI
     st.markdown("""
     <div style="text-align: center; padding-bottom: 20px;">
         <h1 style="color: #00ff88; font-size: 42px; margin-bottom: 0;">QUANTUM FOOTBALL</h1>
@@ -230,7 +253,6 @@ def main():
 
     dm = DataManager(api_key)
 
-    # SEÇİM EKRANI (YAN YANA)
     col_lig, col_mac = st.columns([1, 2])
     with col_lig:
         lid_key = st.selectbox("🏆 Lig Seçiniz", list(CONSTANTS["LEAGUES"].keys()))
@@ -253,7 +275,6 @@ def main():
     else:
         st.info("Bu ligde planlanmış maç yok."); st.stop()
 
-    # AYARLAR
     with st.expander("⚙️ Simülasyon Parametreleri"):
         c1, c2 = st.columns(2)
         with c1:
@@ -268,7 +289,6 @@ def main():
             agk = st.checkbox("Kaleci Eksik", key="agk")
         weather = st.selectbox("Hava Durumu", list(CONSTANTS["WEATHER"].keys()))
 
-    # ANALİZ BUTONU
     if st.button("🚀 ANALİZİ BAŞLAT", use_container_width=True):
         engine = AnalyticsEngine()
         h_stats = dm.get_stats(standings, fixtures, m['homeTeam']['id'])
@@ -284,7 +304,6 @@ def main():
             st.session_state['results'] = {'res': res, 'h_stats': h_stats, 'a_stats': a_stats, 'avg': avg, 'match_name': match_name}
             save_prediction(m['id'], match_name, m['utcDate'], lid, res['1x2'], params, current_user)
 
-    # SONUÇLAR
     if 'results' in st.session_state and st.session_state['results']:
         data = st.session_state['results']
         res = data['res']
@@ -292,57 +311,65 @@ def main():
         a_stats = data['a_stats']
         
         st.divider()
-        
-        # ÜST KARTLAR
         c1, c2, c3 = st.columns(3)
         c1.markdown(f"<div class='stat-card'><img src='{h_stats['crest']}' width='60'><br><b>{h_stats['name']}</b><br><span class='big-num'>%{res['1x2'][0]:.1f}</span></div>", unsafe_allow_html=True)
         c2.markdown(f"<div class='stat-card'><br>BERABERLİK<br><span class='big-num' style='color:#ccc'>%{res['1x2'][1]:.1f}</span></div>", unsafe_allow_html=True)
         c3.markdown(f"<div class='stat-card'><img src='{a_stats['crest']}' width='60'><br><b>{a_stats['name']}</b><br><span class='big-num' style='color:#ff4444'>%{res['1x2'][2]:.1f}</span></div>", unsafe_allow_html=True)
-        
         st.progress(res['1x2'][0]/100)
         
-        # TABLAR
-        t1, t2, t3 = st.tabs(["📊 Analitik & Takım DNA", "🔥 Skor Matrisi", "⏱️ İY / MS"])
+        t1, t2, t3, t4, t5 = st.tabs(["📊 Analitik", "⚖️ Güç Dengesi", "🌊 Simülasyon", "🔥 Skor Matrisi", "⏱️ İY / MS"])
         
         with t1:
             col_a, col_b = st.columns(2)
             with col_a:
-                # DAHA DOLU GÖRÜNÜM İÇİN METRİKLER
                 st.subheader("Maç Beklentisi")
                 m1, m2 = st.columns(2)
                 m1.metric("En Olası Skor", res['most_likely'])
                 m2.metric("Toplam Gol (Ort)", f"{data['avg']:.2f}")
-                
                 st.write(f"⚽ **2.5 Üst:** %{res['over_25']:.1f}"); st.progress(res['over_25']/100)
                 st.write(f"🔄 **KG Var:** %{res['btts']:.1f}"); st.progress(res['btts']/100)
-                
                 eng = AnalyticsEngine()
-                st.info(f"🧬 **Takım DNA:** {h_stats['name']} ({eng.determine_dna(h_stats['gf'], h_stats['ga'], data['avg'])}) vs {a_stats['name']} ({eng.determine_dna(a_stats['gf'], a_stats['ga'], data['avg'])})")
-                
+                st.info(f"🧬 **DNA:** {h_stats['name']} ({eng.determine_dna(h_stats['gf'], h_stats['ga'], data['avg'])}) vs {a_stats['name']} ({eng.determine_dna(a_stats['gf'], a_stats['ga'], data['avg'])})")
             with col_b: st.plotly_chart(create_radar(h_stats, a_stats, data['avg']), use_container_width=True)
 
         with t2:
-            st.write("Yatay: **Deplasman** Golleri | Dikey: **Ev Sahibi** Golleri")
-            # GÜNCELLENMİŞ ISI HARİTASI (RAKAMLAR İÇİNDE YAZIYOR)
-            fig = go.Figure(data=go.Heatmap(
-                z=res['matrix'], 
-                x=[0,1,2,3,4,5,"6+"], 
-                y=[0,1,2,3,4,5,"6+"],
-                colorscale='Magma',
-                text=np.round(res['matrix'], 1), # Yüzdeleri kutu içine yaz
-                texttemplate="%{text}%",
-                textfont={"size":12}
-            ))
-            fig.update_layout(
-                title="Skor Olasılık Isı Haritası", 
-                xaxis_title="Deplasman Gol",
-                yaxis_title="Ev Sahibi Gol",
-                paper_bgcolor='rgba(0,0,0,0)', 
-                font_color='white'
-            )
-            st.plotly_chart(fig, use_container_width=True)
+            st.subheader("⚔️ Takım Güç Karşılaştırması")
+            def normalize(val): return min(int(val * 40), 100)
+            h_att = normalize(h_stats['gf']); a_att = normalize(a_stats['gf'])
+            h_def = normalize(2.8 - h_stats['ga']); a_def = normalize(2.8 - a_stats['ga'])
+            c_p1, c_p2 = st.columns(2)
+            with c_p1:
+                st.markdown(f"**🛡️ {h_stats['name']} (Ev)**")
+                st.write(f"Hücum Gücü: {h_att}/100"); st.progress(h_att/100)
+                st.write(f"Savunma Direnci: {h_def}/100"); st.progress(h_def/100)
+            with c_p2:
+                st.markdown(f"**⚔️ {a_stats['name']} (Dep)**")
+                st.write(f"Hücum Gücü: {a_att}/100"); st.progress(a_att/100)
+                st.write(f"Savunma Direnci: {a_def}/100"); st.progress(a_def/100)
 
         with t3:
+            st.subheader("🎲 Toplam Gol Olasılıkları")
+            matrix = res['matrix']
+            total_goals_prob = []
+            for i in range(7):
+                prob = 0
+                for x in range(7):
+                    for y in range(7):
+                        if x+y == i: prob += matrix[x][y]
+                        elif i == 6 and x+y >= 6: prob += matrix[x][y]
+                total_goals_prob.append(prob)
+            df_sim = pd.DataFrame({"Toplam Gol": ["0", "1", "2", "3", "4", "5", "6+"], "Olasılık (%)": total_goals_prob})
+            fig_hist = go.Figure(data=[go.Bar(x=df_sim['Toplam Gol'], y=df_sim['Olasılık (%)'], marker_color='#00ff88', text=df_sim['Olasılık (%)'].apply(lambda x: f"%{x:.1f}"), textposition='auto')])
+            fig_hist.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_color='white', yaxis=dict(showgrid=False), xaxis_title="Maçtaki Toplam Gol Sayısı")
+            st.plotly_chart(fig_hist, use_container_width=True)
+
+        with t4:
+            st.write("Yatay: **Deplasman** Golleri | Dikey: **Ev Sahibi** Golleri")
+            fig = go.Figure(data=go.Heatmap(z=res['matrix'], x=[0,1,2,3,4,5,"6+"], y=[0,1,2,3,4,5,"6+"], colorscale='Magma', text=np.round(res['matrix'], 1), texttemplate="%{text}%", textfont={"size":12}))
+            fig.update_layout(title="Skor Isı Haritası", paper_bgcolor='rgba(0,0,0,0)', font_color='white')
+            st.plotly_chart(fig, use_container_width=True)
+
+        with t5:
             df_htft = pd.DataFrame(list(res['htft'].items()), columns=['Tahmin', 'Olasılık %']).sort_values('Olasılık %', ascending=False).head(7)
             st.table(df_htft.set_index('Tahmin'))
 
@@ -350,16 +377,10 @@ def main():
         st.download_button("📄 PDF Raporu İndir", pdf_bytes, "Analiz.pdf", "application/pdf", use_container_width=True)
 
     st.divider()
-    # GİZLİLİK GÜNCELLEMESİ (MAİL SANSÜRLEME)
     with st.expander("📜 Son Analizler (Firebase)", expanded=False):
         if db:
             docs = db.collection("predictions").order_by("timestamp", direction=firestore.Query.DESCENDING).limit(10).stream()
-            # User mailini maskeleyerek gösteriyoruz
-            hist = [{
-                "Tarih": d.to_dict().get('match_date','').split('T')[0], 
-                "Maç": d.to_dict().get('match'), 
-                "User": mask_user(d.to_dict().get('user')) 
-            } for d in docs]
+            hist = [{"Tarih": d.to_dict().get('match_date','').split('T')[0], "Maç": d.to_dict().get('match'), "User": mask_user(d.to_dict().get('user'))} for d in docs]
             if hist: st.table(pd.DataFrame(hist))
 
 if __name__ == "__main__":
