@@ -79,7 +79,7 @@ def save_prediction(match_id, match_name, match_date, league, probs, params, use
     except: pass
 
 # -----------------------------------------------------------------------------
-# 3. ANALİZ VE KARAR MOTORU (GÜNCELLENDİ)
+# 3. ANALİZ VE KARAR MOTORU
 # -----------------------------------------------------------------------------
 class AnalyticsEngine:
     def __init__(self): self.rng = np.random.default_rng()
@@ -142,26 +142,19 @@ class AnalyticsEngine:
             "htft": htft.to_dict(), "most_likely": most_likely_score
         }
 
-    # --- KARAR MOTORU (YENİ) ---
     def decision_engine(self, res, h_stats, a_stats, params):
         decisions = {"safe": [], "risky": [], "avoid": [], "reasons": []}
         
-        # 1. Güven Skoru Hesapla (Volatiliteye göre)
-        # Eğer bir olasılık çok yüksekse güven artar, hepsi yakınsa düşer.
         probs = res['1x2']
-        std_dev = np.std(probs) # Standart sapma
-        confidence_score = min(int(std_dev * 2.5 + 40), 99) # Basit bir scaling
+        std_dev = np.std(probs) 
+        confidence_score = min(int(std_dev * 2.5 + 40), 99)
         
-        # 2. Seçim Mantığı
-        # KG VAR
         if res['btts'] >= 60: decisions['safe'].append(f"KG Var (%{res['btts']:.1f})")
         elif res['btts'] >= 52: decisions['risky'].append(f"KG Var (%{res['btts']:.1f})")
         
-        # 2.5 ÜST
         if res['over_25'] >= 60: decisions['safe'].append(f"2.5 Üst (%{res['over_25']:.1f})")
         elif res['over_25'] >= 52: decisions['risky'].append(f"2.5 Üst (%{res['over_25']:.1f})")
         
-        # MAÇ SONUCU
         winner_prob = max(probs)
         winner_idx = probs.index(winner_prob)
         labels = ["Ev Sahibi", "Beraberlik", "Deplasman"]
@@ -175,7 +168,6 @@ class AnalyticsEngine:
             decisions['avoid'].append("Maç Sonucu (1X2)")
             decisions['reasons'].append("Maç sonucu belirsizliği yüksek (Kaotik).")
 
-        # 3. Nedenler (Explainability)
         if h_stats['gf'] > 2.0: decisions['reasons'].append("Ev sahibi hücum gücü çok yüksek.")
         if a_stats['ga'] > 1.8: decisions['reasons'].append("Deplasman savunması kırılgan.")
         if params['hk'] or params['ak']: decisions['reasons'].append("Kritik eksikler simülasyonu etkiledi.")
@@ -184,13 +176,16 @@ class AnalyticsEngine:
         return decisions, confidence_score
 
 # -----------------------------------------------------------------------------
-# 4. GÖRSELLEŞTİRME & PDF
+# 4. GÖRSELLEŞTİRME & PDF (HATA DÜZELTİLDİ)
 # -----------------------------------------------------------------------------
 def check_font():
     font_path = "DejaVuSans.ttf"
     if not os.path.exists(font_path):
         url = "https://github.com/coreybutler/fonts/raw/master/ttf/DejaVuSans.ttf"
-        try: urllib.request.urlretrieve(url, font_path)
+        try: 
+            urllib.request.urlretrieve(url, font_path)
+            if os.path.getsize(font_path) < 1000: # Dosya bozuksa sil
+                os.remove(font_path)
         except: pass
     return font_path
 
@@ -221,24 +216,48 @@ def create_radar(h_stats, a_stats, avg):
 
 def create_pdf(h_stats, a_stats, res, radar, decisions):
     font_path = check_font()
-    pdf = FPDF(); pdf.add_page()
-    if os.path.exists(font_path): pdf.add_font("DejaVu", "", font_path); pdf.set_font("DejaVu", "", 16)
-    else: pdf.set_font("Arial", "B", 16)
+    pdf = FPDF()
+    pdf.add_page()
+    
+    font_loaded = False
+    if os.path.exists(font_path):
+        try:
+            pdf.add_font("DejaVu", "", font_path)
+            pdf.set_font("DejaVu", "", 16)
+            font_loaded = True
+        except: pass
 
-    pdf.cell(0,10,"QUANTUM FOOTBALL - KARAR RAPORU",ln=True,align="C")
-    if os.path.exists(font_path): pdf.set_font("DejaVu", "", 12)
+    if not font_loaded:
+        pdf.set_font("Arial", "B", 16)
+    
+    # --- KURŞUN GEÇİRMEZ METİN FONKSİYONU ---
+    # Eğer font yüklenemezse Türkçe karakterleri temizler (Örn: ğ -> g)
+    def safe_txt(text):
+        if font_loaded: return text # Font varsa elleme
+        # Font yoksa temizle
+        replacements = {
+            "ğ":"g", "Ğ":"G", "ı":"i", "İ":"I", "ş":"s", "Ş":"S", 
+            "ü":"u", "Ü":"U", "ö":"o", "Ö":"O", "ç":"c", "Ç":"C"
+        }
+        for k, v in replacements.items():
+            text = text.replace(k, v)
+        return text.encode('latin-1', 'replace').decode('latin-1')
+
+    pdf.cell(0,10,safe_txt("QUANTUM FOOTBALL - KARAR RAPORU"),ln=True,align="C")
+    
+    if font_loaded: pdf.set_font("DejaVu", "", 12)
     else: pdf.set_font("Arial", "", 12)
     
     pdf.ln(5)
-    pdf.cell(0,10,f"Mac: {h_stats['name']} vs {a_stats['name']}",ln=True)
+    pdf.cell(0,10,f"Mac: {safe_txt(h_stats['name'])} vs {safe_txt(a_stats['name'])}", ln=True)
     pdf.ln(5)
     
-    pdf.set_font(style='B')
-    pdf.cell(0,10,"MODEL ONERILERI:", ln=True)
-    pdf.set_font(style='')
+    if not font_loaded: pdf.set_font("Arial", "B", 12)
+    pdf.cell(0,10,safe_txt("MODEL ONERILERI:"), ln=True)
+    if not font_loaded: pdf.set_font("Arial", "", 12)
     
-    if decisions['safe']: pdf.cell(0,10,f"GUVENLI: {', '.join(decisions['safe'])}", ln=True)
-    if decisions['risky']: pdf.cell(0,10,f"RISKLI (DEGERLI): {', '.join(decisions['risky'])}", ln=True)
+    if decisions['safe']: pdf.cell(0,10,f"GUVENLI: {safe_txt(', '.join(decisions['safe']))}", ln=True)
+    if decisions['risky']: pdf.cell(0,10,f"RISKLI (DEGERLI): {safe_txt(', '.join(decisions['risky']))}", ln=True)
     
     pdf.ln(5)
     pdf.cell(0,10,f"Ev: %{res['1x2'][0]:.1f} | X: %{res['1x2'][1]:.1f} | Dep: %{res['1x2'][2]:.1f}",ln=True)
@@ -338,7 +357,6 @@ def main():
             h_g, a_g, xg = engine.run_simulation(h_stats, a_stats, avg, params, 1.08)
             res = engine.analyze(h_g, a_g, 500000)
             
-            # KARAR MOTORUNU ÇALIŞTIR
             decisions, confidence = engine.decision_engine(res, h_stats, a_stats, params)
             
             st.session_state['results'] = {
@@ -362,10 +380,8 @@ def main():
         c3.markdown(f"<div class='stat-card'><img src='{a_stats['crest']}' width='60'><br><b>{a_stats['name']}</b><br><span class='big-num' style='color:#ff4444'>%{res['1x2'][2]:.1f}</span></div>", unsafe_allow_html=True)
         st.progress(res['1x2'][0]/100)
         
-        # --- YENİ TAB YAPISI (KARAR MOTORU EKLENDİ) ---
         t_decision, t1, t2, t3, t4, t5 = st.tabs(["🧠 Karar Motoru", "📊 Analitik", "⚖️ Güç Dengesi", "🌊 Simülasyon", "🔥 Skor Matrisi", "⏱️ İY / MS"])
         
-        # 0. SEKME: KARAR MOTORU (YENİ)
         with t_decision:
             d1, d2 = st.columns([2, 1])
             with d1:
