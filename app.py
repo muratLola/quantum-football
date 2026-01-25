@@ -20,7 +20,10 @@ from firebase_admin import credentials, firestore
 if not firebase_admin._apps:
     try:
         if "firebase" in st.secrets:
-            cred = credentials.Certificate(dict(st.secrets["firebase"]))
+            # Private key düzeltmesi
+            creds_dict = dict(st.secrets["firebase"])
+            creds_dict["private_key"] = creds_dict["private_key"].replace('\\n', '\n')
+            cred = credentials.Certificate(creds_dict)
             firebase_admin.initialize_app(cred)
     except Exception as e: logger.error(f"Firebase Init Error: {e}")
 try: db = firestore.client()
@@ -122,7 +125,6 @@ class AnalyticsEngine:
         xg_h = base_h * th[0] * ta[1] * w
         xg_a = base_a * ta[0] * th[1] * w
         
-        # Eksikler (Hem Ev Hem Dep)
         if params['hk']: xg_h *= 0.8
         if params['hgk']: xg_a *= 1.2
         if params['ak']: xg_a *= 0.8
@@ -152,24 +154,41 @@ class AnalyticsEngine:
         return {"1x2": [p1, px, p2], "matrix": m, "btts": btts, "over_25": over_25, "htft": htft.to_dict()}
 
 # -----------------------------------------------------------------------------
-# 4. YARDIMCILAR
+# 4. YARDIMCILAR (GÜNCELLENDİ: HATA YÖNETİMİ)
 # -----------------------------------------------------------------------------
 class DataManager:
     def __init__(self, key): self.headers = {"X-Auth-Token": key}
-    @st.cache_data(ttl=3600)
+    
+    @st.cache_data(ttl=3600, show_spinner=False)
     def fetch(_self, league):
         try:
+            # 1. Puan Durumu Çek
             r1 = requests.get(f"{CONSTANTS['API_URL']}/competitions/{league}/standings", headers=_self.headers)
-            r2 = requests.get(f"{CONSTANTS['API_URL']}/competitions/{league}/matches", headers=_self.headers)
+            
+            # 2. Maçları Çek (Sadece Planlanmış Olanlar - Daha Hızlı ve Az Hata Verir)
+            r2 = requests.get(f"{CONSTANTS['API_URL']}/competitions/{league}/matches?status=SCHEDULED", headers=_self.headers)
+            
+            # HATA KONTROLÜ: API Limitine takıldık mı?
+            if r2.status_code != 200:
+                st.error(f"⚠️ API Hatası (Kod: {r2.status_code}): {r2.json().get('message', 'Veri alınamadı')}. Lütfen biraz bekleyin.")
+                return None, None
+
             return r1.json(), r2.json()
-        except: return None, None
+        except Exception as e:
+            st.error(f"Bağlantı Hatası: {str(e)}")
+            return None, None
+
     def get_stats(self, s, m, tid):
+        # Güvenli Veri Çekme
+        if not s or 'standings' not in s:
+            return {"name":"Takım", "gf":1.3, "ga":1.3, "crest":CONSTANTS["DEFAULT_LOGO"]}
+            
         for st_ in s.get('standings',[]):
             if st_['type']=='TOTAL':
                 for t in st_['table']:
                     if t['team']['id']==tid:
-                        return {"name":t['team']['name'], "gf":t['goalsFor']/t['playedGames'], "ga":t['goalsAgainst']/t['playedGames'], "crest":t['team'].get('crest','')}
-        return {"name":"Takım", "gf":1.3, "ga":1.3, "crest":""}
+                        return {"name":t['team']['name'], "gf":t['goalsFor']/t['playedGames'], "ga":t['goalsAgainst']/t['playedGames'], "crest":t['team'].get('crest', CONSTANTS["DEFAULT_LOGO"])}
+        return {"name":"Takım", "gf":1.3, "ga":1.3, "crest":CONSTANTS["DEFAULT_LOGO"]}
 
 def create_radar(h_stats, a_stats, avg):
     def n(v): return min(max(v/avg*50, 20), 99)
@@ -202,43 +221,51 @@ def main():
         .big-num {font-size: 24px; font-weight: bold; color: #00ff88;}
     </style>""", unsafe_allow_html=True)
 
-    # DÜZELTME: SADECE "QUANTUM FOOTBALL"
     st.title("⚽ QUANTUM FOOTBALL")
+    
+    if 'results' not in st.session_state: st.session_state['results'] = None
     
     api_key = st.secrets.get("FOOTBALL_API_KEY")
     if not api_key: st.error("API Key Yok"); st.stop()
 
-    # DÜZELTME: ŞİFRELİ ADMIN PANELİ
     if st.sidebar.checkbox("Admin Girişi"):
         password = st.sidebar.text_input("Şifre", type="password")
-        if password == "muratLola26": # Burayı istersen değiştirebilirsin
+        if password == "admin123": 
             if st.sidebar.button("🔄 Sonuçları Güncelle"):
                 agent = AutomationAgent(api_key)
                 c, m = agent.auto_grade_predictions()
                 st.sidebar.success(m)
-        elif password:
-            st.sidebar.error("Hatalı Şifre")
+        elif password: st.sidebar.error("Hatalı Şifre")
 
     dm = DataManager(api_key)
     lid_key = st.selectbox("Lig Seçiniz", list(CONSTANTS["LEAGUES"].keys()))
     lid = CONSTANTS["LEAGUES"][lid_key]
     
+    # Veri Çekme (Hata Kontrollü)
     standings, fixtures = dm.fetch(lid)
-    if not standings: st.error("Veri Alınamadı"); st.stop()
     
-    upcoming = [m for m in fixtures.get('matches',[]) if m['status'] in ['SCHEDULED','TIMED']]
-    if not upcoming: st.info("Bu ligde planlanmış maç yok."); st.stop()
+    # Eğer veri gelmediyse veya standings boşsa durdur
+    if not standings or not fixtures:
+        st.warning("Bu lig için veri çekilemedi. API limitiniz dolmuş olabilir veya lig şu an aktif değil.")
+        st.stop()
+    
+    # Fikstür Filtreleme
+    upcoming = fixtures.get('matches', [])
+    if not upcoming: 
+        st.info("Bu ligde planlanmış (tarihi belli) maç bulunamadı.")
+        st.stop()
 
     m_map = {}
     for m in upcoming:
-        dt = datetime.strptime(m['utcDate'], "%Y-%m-%dT%H:%M:%SZ").strftime("%d.%m.%Y")
+        try:
+            dt = datetime.strptime(m['utcDate'], "%Y-%m-%dT%H:%M:%SZ").strftime("%d.%m.%Y")
+        except: dt = "-"
         label = f"{m['homeTeam']['name']} vs {m['awayTeam']['name']} ({dt})"
         m_map[label] = m
     
     match_name = st.selectbox("Maç Seçiniz", list(m_map.keys()))
     m = m_map[match_name]
 
-    # DÜZELTME: DETAYLI AYARLAR (EV VE DEPLASMAN EKSİKLERİ)
     with st.expander("⚙️ Detaylı Ayarlar"):
         c1, c2 = st.columns(2)
         with c1:
@@ -251,7 +278,6 @@ def main():
             t_a = st.selectbox("Taktik", list(CONSTANTS["TACTICS"].keys()), key="ta")
             ak = st.checkbox("Golcü Eksik", key="ak")
             agk = st.checkbox("Kaleci Eksik", key="agk")
-        
         st.markdown("---")
         weather = st.selectbox("Hava Durumu", list(CONSTANTS["WEATHER"].keys()))
 
@@ -261,17 +287,25 @@ def main():
         a_stats = dm.get_stats(standings, fixtures, m['awayTeam']['id'])
         avg = 2.8
         
-        # DÜZELTME: TÜM PARAMETRELERİ GÖNDERİYORUZ
         params = {"sim_count": 500000, "t_h": t_h, "t_a": t_a, "weather": weather, 
                   "hk": hk, "hgk": hgk, "ak": ak, "agk": agk}
         
-        # DÜZELTME: SPINNER YAZISI
         with st.spinner("500.000 maç simüle ediliyor..."):
             h_g, a_g, xg = engine.run_simulation(h_stats, a_stats, avg, params, 1.08)
             res = engine.analyze(h_g, a_g, 500000)
+            
+            st.session_state['results'] = {
+                'res': res, 'h_stats': h_stats, 'a_stats': a_stats, 'avg': avg, 
+                'match_name': match_name
+            }
             save_prediction(m['id'], match_name, m['utcDate'], lid, res['1x2'], params, "User")
 
-        # --- SONUÇ KARTLARI ---
+    if st.session_state['results']:
+        data = st.session_state['results']
+        res = data['res']
+        h_stats = data['h_stats']
+        a_stats = data['a_stats']
+        
         st.divider()
         c1, c2, c3 = st.columns(3)
         c1.markdown(f"<div class='stat-card'><img src='{h_stats['crest']}' width='50'><br>{h_stats['name']}<br><span class='big-num'>%{res['1x2'][0]:.1f}</span></div>", unsafe_allow_html=True)
@@ -280,7 +314,6 @@ def main():
         
         st.progress(res['1x2'][0]/100)
 
-        # --- SEKMELER ---
         tab1, tab2, tab3 = st.tabs(["📊 İstatistikler & Radar", "🔥 Skor Matrisi", "⏱️ İY / MS"])
         
         with tab1:
@@ -292,12 +325,13 @@ def main():
                 st.write(f"🔄 **Karşılıklı Gol (KG Var):** %{res['btts']:.1f}")
                 st.progress(res['btts']/100)
                 
-                h_dna = engine.determine_dna(h_stats['gf'], h_stats['ga'], avg)
-                a_dna = engine.determine_dna(a_stats['gf'], a_stats['ga'], avg)
+                eng = AnalyticsEngine()
+                h_dna = eng.determine_dna(h_stats['gf'], h_stats['ga'], data['avg'])
+                a_dna = eng.determine_dna(a_stats['gf'], a_stats['ga'], data['avg'])
                 st.info(f"🧬 Takım Karakteri: **{h_dna}** vs **{a_dna}**")
 
             with col_b:
-                radar = create_radar(h_stats, a_stats, avg)
+                radar = create_radar(h_stats, a_stats, data['avg'])
                 st.plotly_chart(radar, use_container_width=True)
 
         with tab2:
@@ -309,34 +343,30 @@ def main():
             df_htft = pd.DataFrame(list(res['htft'].items()), columns=['Tahmin', 'Olasılık %']).sort_values('Olasılık %', ascending=False).head(7)
             st.table(df_htft.set_index('Tahmin'))
 
-        if st.button("📄 PDF Raporu İndir"):
-            pdf_data = create_pdf(h_stats, a_stats, res, radar)
-            safe_name = f"Analiz_{match_name.split('(')[0].strip().replace(' ','_')}.pdf"
-            st.download_button("📥 İndir", pdf_data, safe_name, "application/pdf")
+        pdf_bytes = create_pdf(h_stats, a_stats, res, radar)
+        safe_name = f"Analiz_{data['match_name'].split('(')[0].strip().replace(' ','_')}.pdf"
+        st.download_button("📄 PDF Raporu İndir", pdf_bytes, safe_name, "application/pdf", use_container_width=True)
 
-    # DÜZELTME: GEÇMİŞ GİZLENDİ VE GÜNCELLENDİ
     st.divider()
     with st.expander("📜 Geçmiş Analizler (Hafıza)", expanded=False):
         if db:
             docs = db.collection("predictions").order_by("timestamp", direction=firestore.Query.DESCENDING).limit(10).stream()
-            data = []
+            data_hist = []
             for d in docs:
                 dd = d.to_dict()
                 raw_date = dd.get('match_date', '')
                 try: dt = datetime.strptime(raw_date, "%Y-%m-%dT%H:%M:%SZ").strftime("%d.%m")
                 except: dt = "-"
                 
-                data.append({
-                    "Tarih": dt, 
-                    "Maç": dd.get('match', 'Bilinmiyor'), 
+                data_hist.append({
+                    "Tarih": dt, "Maç": dd.get('match', 'Bilinmiyor'), 
                     "Tahmin": f"Ev %{dd.get('home_prob', 0):.0f}",
                     "Sonuç": dd.get('actual_result', '⏳')
                 })
             
-            if data: st.table(pd.DataFrame(data))
+            if data_hist: st.table(pd.DataFrame(data_hist))
             else: st.info("Henüz veri yok.")
         else: st.warning("Veritabanı bağlı değil.")
 
 if __name__ == "__main__":
     main()
-
