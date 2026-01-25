@@ -2,10 +2,7 @@ streamlit
 pandas
 numpy
 requests
-qiskit
-qiskit-aer
-lxml
 plotly
 firebase-admin
-fpdfstreamlit
-fpdf
+fpdf2
+kaleido==0.2.1
