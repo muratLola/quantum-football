@@ -32,12 +32,22 @@ try: db = firestore.client()
 except: db = None
 
 # -----------------------------------------------------------------------------
-# 1. KULLANICIYI LİNKTEN YAKALAMA (BRIDGE)
+# 1. YARDIMCI FONKSİYONLAR (GİZLİLİK & FORMAT)
 # -----------------------------------------------------------------------------
-# Web sitesi iframe'i şöyle çağırır: ...onrender.com/?user_email=abc@mail.com
+# Web sitesinden gelen parametreleri al
 query_params = st.query_params
-# Eğer linkte e-posta varsa onu al, yoksa "Misafir" yaz
 current_user = query_params.get("user_email", "Misafir_User")
+
+def mask_user(email):
+    """E-postayı gizler: ahmet@gmail.com -> ah***@gmail.com"""
+    if not email or "@" not in email: return "Misafir"
+    try:
+        user, domain = email.split('@')
+        if len(user) > 2:
+            return f"{user[:2]}***@{domain}"
+        return f"{user[0]}***@{domain}"
+    except:
+        return "Gizli Kullanıcı"
 
 CONSTANTS = {
     "API_URL": "https://api.football-data.org/v4",
@@ -56,7 +66,7 @@ CONSTANTS = {
 }
 
 # -----------------------------------------------------------------------------
-# 2. KAYIT (ARTIK E-POSTA KAYDEDİLİYOR)
+# 2. KAYIT
 # -----------------------------------------------------------------------------
 def save_prediction(match_id, match_name, match_date, league, probs, params, user):
     if db is None: return
@@ -69,30 +79,6 @@ def save_prediction(match_id, match_name, match_date, league, probs, params, use
             "actual_result": None, "user": user, "params": str(params)
         })
     except: pass
-
-class AutomationAgent:
-    def __init__(self, api_key): self.headers = {"X-Auth-Token": api_key}
-    def auto_grade_predictions(self):
-        if db is None: return 0, "Veritabanı Yok"
-        docs = db.collection("predictions").where("actual_result", "==", None).stream()
-        count = 0
-        for doc in docs:
-            data = doc.to_dict()
-            match_id = data.get("match_id")
-            if not match_id: continue
-            try:
-                r = requests.get(f"{CONSTANTS['API_URL']}/matches/{match_id}", headers=self.headers)
-                if r.status_code == 200:
-                    m_data = r.json()
-                    if m_data['status'] == 'FINISHED':
-                        ft = m_data['score']['fullTime']
-                        score_str = f"{ft['home']}-{ft['away']}"
-                        db.collection("predictions").document(doc.id).update({
-                            "actual_result": score_str, "graded_at": firestore.SERVER_TIMESTAMP
-                        })
-                        count += 1
-            except: pass
-        return count, f"{count} maç güncellendi."
 
 # -----------------------------------------------------------------------------
 # 3. ANALİZ MOTORU
@@ -145,15 +131,26 @@ class AnalyticsEngine:
         btts = np.mean((h > 0) & (a > 0)) * 100
         over_25 = np.mean((h + a) > 2.5) * 100
         
+        # En olası skor tahmini
+        max_idx = np.unravel_index(np.argmax(m, axis=None), m.shape)
+        most_likely_score = f"{max_idx[0]}-{max_idx[1]}"
+        
         ht_h = self.rng.binomial(h, 0.45); ht_a = self.rng.binomial(a, 0.45)
         res_ht = np.where(ht_h > ht_a, "1", np.where(ht_h < ht_a, "2", "X"))
         res_ft = np.where(h > a, "1", np.where(h < a, "2", "X"))
         htft = pd.Series([f"{x}/{y}" for x,y in zip(res_ht, res_ft)]).value_counts(normalize=True)*100
 
-        return {"1x2": [p1, px, p2], "matrix": m, "btts": btts, "over_25": over_25, "htft": htft.to_dict()}
+        return {
+            "1x2": [p1, px, p2], 
+            "matrix": m, 
+            "btts": btts, 
+            "over_25": over_25, 
+            "htft": htft.to_dict(),
+            "most_likely": most_likely_score
+        }
 
 # -----------------------------------------------------------------------------
-# 4. YARDIMCILAR & GÖRSELLEŞTİRME
+# 4. GÖRSELLEŞTİRME & PDF
 # -----------------------------------------------------------------------------
 class DataManager:
     def __init__(self, key): self.headers = {"X-Auth-Token": key}
@@ -177,7 +174,7 @@ def create_radar(h_stats, a_stats, avg):
     fig = go.Figure()
     fig.add_trace(go.Scatterpolar(r=[n(h_stats['gf']), n(2.8-h_stats['ga']), 80, 70, 60], theta=['Hücum','Defans','Form','İstikrar','Şans'], fill='toself', name=h_stats['name'], line_color='#00ff88'))
     fig.add_trace(go.Scatterpolar(r=[n(a_stats['gf']), n(2.8-a_stats['ga']), 75, 65, 55], theta=['Hücum','Defans','Form','İstikrar','Şans'], fill='toself', name=a_stats['name'], line_color='#ff0044'))
-    fig.update_layout(polar=dict(bgcolor='#151922', radialaxis=dict(visible=True, range=[0,100])), showlegend=True, paper_bgcolor='rgba(0,0,0,0)', font_color='white', margin=dict(t=30, b=30))
+    fig.update_layout(polar=dict(bgcolor='#1e2129', radialaxis=dict(visible=True, range=[0,100])), showlegend=True, paper_bgcolor='rgba(0,0,0,0)', font_color='white', margin=dict(t=30, b=30))
     return fig
 
 def create_pdf(h_stats, a_stats, res, radar):
@@ -223,7 +220,6 @@ def main():
     with k2: st.metric("🧠 Simülasyon", "50K+", "Maç Başı")
     with k3: st.metric("🌍 Kapsam", "8 Lig", "Global")
     
-    # KULLANICI ADINI BURAYA YAZDIRIYORUZ
     display_name = current_user.split('@')[0] if '@' in current_user else current_user
     with k4: st.metric("👤 Kullanıcı", display_name, "Aktif")
     
@@ -296,26 +292,54 @@ def main():
         a_stats = data['a_stats']
         
         st.divider()
+        
+        # ÜST KARTLAR
         c1, c2, c3 = st.columns(3)
         c1.markdown(f"<div class='stat-card'><img src='{h_stats['crest']}' width='60'><br><b>{h_stats['name']}</b><br><span class='big-num'>%{res['1x2'][0]:.1f}</span></div>", unsafe_allow_html=True)
         c2.markdown(f"<div class='stat-card'><br>BERABERLİK<br><span class='big-num' style='color:#ccc'>%{res['1x2'][1]:.1f}</span></div>", unsafe_allow_html=True)
         c3.markdown(f"<div class='stat-card'><img src='{a_stats['crest']}' width='60'><br><b>{a_stats['name']}</b><br><span class='big-num' style='color:#ff4444'>%{res['1x2'][2]:.1f}</span></div>", unsafe_allow_html=True)
         
         st.progress(res['1x2'][0]/100)
-        t1, t2, t3 = st.tabs(["📊 Analitik", "🔥 Skor Matrisi", "⏱️ İY / MS"])
+        
+        # TABLAR
+        t1, t2, t3 = st.tabs(["📊 Analitik & Takım DNA", "🔥 Skor Matrisi", "⏱️ İY / MS"])
         
         with t1:
             col_a, col_b = st.columns(2)
             with col_a:
+                # DAHA DOLU GÖRÜNÜM İÇİN METRİKLER
+                st.subheader("Maç Beklentisi")
+                m1, m2 = st.columns(2)
+                m1.metric("En Olası Skor", res['most_likely'])
+                m2.metric("Toplam Gol (Ort)", f"{data['avg']:.2f}")
+                
                 st.write(f"⚽ **2.5 Üst:** %{res['over_25']:.1f}"); st.progress(res['over_25']/100)
                 st.write(f"🔄 **KG Var:** %{res['btts']:.1f}"); st.progress(res['btts']/100)
+                
                 eng = AnalyticsEngine()
-                st.info(f"🧬 Takım Karakteri: {eng.determine_dna(h_stats['gf'], h_stats['ga'], data['avg'])} vs {eng.determine_dna(a_stats['gf'], a_stats['ga'], data['avg'])}")
+                st.info(f"🧬 **Takım DNA:** {h_stats['name']} ({eng.determine_dna(h_stats['gf'], h_stats['ga'], data['avg'])}) vs {a_stats['name']} ({eng.determine_dna(a_stats['gf'], a_stats['ga'], data['avg'])})")
+                
             with col_b: st.plotly_chart(create_radar(h_stats, a_stats, data['avg']), use_container_width=True)
 
         with t2:
-            fig = go.Figure(data=go.Heatmap(z=res['matrix'], colorscale='Magma', x=[0,1,2,3,4,5,"6+"], y=[0,1,2,3,4,5,"6+"]))
-            fig.update_layout(title="Skor Olasılık Isı Haritası", paper_bgcolor='rgba(0,0,0,0)', font_color='white')
+            st.write("Yatay: **Deplasman** Golleri | Dikey: **Ev Sahibi** Golleri")
+            # GÜNCELLENMİŞ ISI HARİTASI (RAKAMLAR İÇİNDE YAZIYOR)
+            fig = go.Figure(data=go.Heatmap(
+                z=res['matrix'], 
+                x=[0,1,2,3,4,5,"6+"], 
+                y=[0,1,2,3,4,5,"6+"],
+                colorscale='Magma',
+                text=np.round(res['matrix'], 1), # Yüzdeleri kutu içine yaz
+                texttemplate="%{text}%",
+                textfont={"size":12}
+            ))
+            fig.update_layout(
+                title="Skor Olasılık Isı Haritası", 
+                xaxis_title="Deplasman Gol",
+                yaxis_title="Ev Sahibi Gol",
+                paper_bgcolor='rgba(0,0,0,0)', 
+                font_color='white'
+            )
             st.plotly_chart(fig, use_container_width=True)
 
         with t3:
@@ -326,10 +350,16 @@ def main():
         st.download_button("📄 PDF Raporu İndir", pdf_bytes, "Analiz.pdf", "application/pdf", use_container_width=True)
 
     st.divider()
+    # GİZLİLİK GÜNCELLEMESİ (MAİL SANSÜRLEME)
     with st.expander("📜 Son Analizler (Firebase)", expanded=False):
         if db:
-            docs = db.collection("predictions").order_by("timestamp", direction=firestore.Query.DESCENDING).limit(5).stream()
-            hist = [{"Tarih": d.to_dict().get('match_date','').split('T')[0], "Maç": d.to_dict().get('match'), "User": d.to_dict().get('user')} for d in docs]
+            docs = db.collection("predictions").order_by("timestamp", direction=firestore.Query.DESCENDING).limit(10).stream()
+            # User mailini maskeleyerek gösteriyoruz
+            hist = [{
+                "Tarih": d.to_dict().get('match_date','').split('T')[0], 
+                "Maç": d.to_dict().get('match'), 
+                "User": mask_user(d.to_dict().get('user')) 
+            } for d in docs]
             if hist: st.table(pd.DataFrame(hist))
 
 if __name__ == "__main__":
