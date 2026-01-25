@@ -136,7 +136,7 @@ def create_radar_chart(h_stats: Dict, a_stats: Dict, avg_g: float):
     return fig
 
 # -----------------------------------------------------------------------------
-# 3. SİMÜLASYON MOTORU (BİLİMSEL WHAT-IF)
+# 3. SİMÜLASYON MOTORU (MANTIK HATASI GİDERİLDİ)
 # -----------------------------------------------------------------------------
 class SimulationEngine:
     def __init__(self, use_fixed_seed: bool = False):
@@ -148,6 +148,7 @@ class SimulationEngine:
     def run_monte_carlo(self, h_stats: Dict, a_stats: Dict, avg_g: float, params: Dict) -> Dict:
         sims = params['sim_count']
         
+        # Temel xG Hesaplama
         h_attack = (h_stats['gf'] / avg_g) * params['h_att_factor']
         h_def = (h_stats['ga'] / avg_g) * params['h_def_factor']
         a_attack = (a_stats['gf'] / avg_g) * params['a_att_factor']
@@ -156,23 +157,40 @@ class SimulationEngine:
         base_xg_h = h_attack * a_def * avg_g
         base_xg_a = a_attack * h_def * avg_g
 
-        # --- BİLİMSEL WHAT-IF SENARYOLARI (GÜNCELLENDİ) ---
+        # --- SENARYO MOTORU (DÜZELTİLDİ) ---
         scenario = params.get('scenario', 'Normal')
         
-        if scenario == 'Kırmızı Kart (Ev)':
-            base_xg_h *= 0.55  # ~%45 Düşüş (Literatür Ortalaması)
-            base_xg_a *= 1.35  # ~%35 Artış
-        elif scenario == 'Kırmızı Kart (Dep)':
-            base_xg_h *= 1.35
-            base_xg_a *= 0.55
-        elif scenario == 'Erken Gol (Ev)':
-            base_xg_h *= 1.15  # Momentum
-            base_xg_a *= 1.1   # Maç açılır
-        elif scenario == 'Erken Gol (Dep)':
-            base_xg_h *= 1.2   # Ev bastırır
-            base_xg_a *= 1.05
+        # Skor Levhası Başlangıcı (Bonus Goller)
+        bonus_h = 0
+        bonus_a = 0
 
-        # Form Hesabı
+        if scenario == 'Kırmızı Kart (Ev)':
+            # Ev sahibi 10 kişi: Hücum çöker, Defans zayıflar
+            base_xg_h *= 0.45  
+            base_xg_a *= 1.45  
+        
+        elif scenario == 'Kırmızı Kart (Dep)':
+            # Deplasman 10 kişi
+            base_xg_h *= 1.45
+            base_xg_a *= 0.45
+        
+        elif scenario == 'Erken Gol (Ev)':
+            # Ev sahibi 1-0 önde başlar!
+            bonus_h = 1 
+            # Taktiksel Değişim: 
+            # Öne geçen takım (Ev) skoru korumaya çalışır (xG düşer, Defans artar)
+            # Gerideki takım (Dep) tüm riskleri alır (xG artar, Defans açık verir)
+            base_xg_h *= 0.75  # Kontra atak oyunu
+            base_xg_a *= 1.40  # Tam saha baskı
+            
+        elif scenario == 'Erken Gol (Dep)':
+            # Deplasman 0-1 önde başlar!
+            bonus_a = 1
+            # Taktiksel Değişim:
+            base_xg_h *= 1.50  # Ev sahibi taraftar baskısıyla yüklenir
+            base_xg_a *= 0.70  # Deplasman kapanır
+
+        # Form Etkisi
         def _calc_form_boost(form_str):
             if not form_str: return 1.0
             matches = form_str.replace(',', '')
@@ -191,7 +209,7 @@ class SimulationEngine:
         base_xg_a *= _calc_form_boost(a_stats.get('form', ''))
         base_xg_h *= CONSTANTS["HOME_ADVANTAGE"]
 
-        # Eksik Oyuncu
+        # Eksik Oyuncu Etkisi
         if params.get('h_missing', 0) > 0: 
             impact = 1 - (1 - CONSTANTS["MISSING_PLAYER_BASE_IMPACT"]) ** params['h_missing']
             base_xg_h *= (1 - impact)
@@ -203,30 +221,36 @@ class SimulationEngine:
         random_factors_h = self.rng.normal(1, sigma, sims)
         random_factors_a = self.rng.normal(1, sigma, sims)
         
+        # Üst Sınır (Clip)
         final_xg_h = np.clip(base_xg_h * random_factors_h, 0.05, 12.0)
         final_xg_a = np.clip(base_xg_a * random_factors_a, 0.05, 12.0)
 
-        # Gamma-Poisson Hibrit
+        # Gamma-Poisson Hibrit Simülasyon
         def simulate_goals(xg_array):
             alpha = 10.0
             gamma_variate = self.rng.gamma(shape=xg_array * alpha, scale=1/alpha)
             return self.rng.poisson(gamma_variate)
 
+        # Golleri Hesapla (Sadece oyun süresi)
         gh_ht = simulate_goals(final_xg_h * 0.45)
         ga_ht = simulate_goals(final_xg_a * 0.45)
         gh_ft = simulate_goals(final_xg_h * 0.55)
         ga_ft = simulate_goals(final_xg_a * 0.55)
 
-        total_h = gh_ht + gh_ft
-        total_a = ga_ht + ga_ft
+        # TOPLAM SKOR = Oyun İçi Goller + Senaryo Bonusu (Erken Gol)
+        total_h = gh_ht + gh_ft + bonus_h
+        total_a = ga_ht + ga_ft + bonus_a
+
+        # HT Skoru için de bonusu ekle (Erken gol ilk yarıda atılmıştır)
+        ht_h_final = gh_ht + bonus_h
+        ht_a_final = ga_ht + bonus_a
 
         return {
             "h": total_h, "a": total_a,
-            "ht": (gh_ht, ga_ht), "ft": (total_h, total_a),
+            "ht": (ht_h_final, ht_a_final), "ft": (total_h, total_a),
             "xg_dist": (final_xg_h, final_xg_a),
             "sims": sims
         }
-
     def analyze_results(self, data: Dict) -> Dict:
         h, a = data["h"], data["a"]
         ht_h, ht_a = data["ht"]
@@ -553,3 +577,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
