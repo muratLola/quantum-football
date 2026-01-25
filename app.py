@@ -211,7 +211,7 @@ def main():
     # DÜZELTME: ŞİFRELİ ADMIN PANELİ
     if st.sidebar.checkbox("Admin Girişi"):
         password = st.sidebar.text_input("Şifre", type="password")
-        if password == "admin123": # Burayı istersen değiştirebilirsin
+        if password == "muratLola26": # Burayı istersen değiştirebilirsin
             if st.sidebar.button("🔄 Sonuçları Güncelle"):
                 agent = AutomationAgent(api_key)
                 c, m = agent.auto_grade_predictions()
@@ -339,3 +339,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
