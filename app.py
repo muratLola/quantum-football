@@ -9,7 +9,7 @@ import io
 from fpdf import FPDF
 from typing import Dict, List, Any
 
-# --- SAYFA AYARLARI (EN BAŞTA OLMALI) ---
+# --- SAYFA AYARLARI ---
 st.set_page_config(page_title="Quantum Football", page_icon="⚽", layout="wide")
 
 # --- LOGGING ---
@@ -32,11 +32,12 @@ try: db = firestore.client()
 except: db = None
 
 # -----------------------------------------------------------------------------
-# 1. AYARLAR & KULLANICI ALGILAMA (KÖPRÜ)
+# 1. KULLANICIYI LİNKTEN YAKALAMA (BRIDGE)
 # -----------------------------------------------------------------------------
-# Web sitesinden gelen user_email parametresini yakala
+# Web sitesi iframe'i şöyle çağırır: ...onrender.com/?user_email=abc@mail.com
 query_params = st.query_params
-current_user = query_params.get("user_email", "Misafir_Kullanici")
+# Eğer linkte e-posta varsa onu al, yoksa "Misafir" yaz
+current_user = query_params.get("user_email", "Misafir_User")
 
 CONSTANTS = {
     "API_URL": "https://api.football-data.org/v4",
@@ -55,7 +56,7 @@ CONSTANTS = {
 }
 
 # -----------------------------------------------------------------------------
-# 2. KAYIT VE OTOMASYON
+# 2. KAYIT (ARTIK E-POSTA KAYDEDİLİYOR)
 # -----------------------------------------------------------------------------
 def save_prediction(match_id, match_name, match_date, league, probs, params, user):
     if db is None: return
@@ -65,7 +66,7 @@ def save_prediction(match_id, match_name, match_date, league, probs, params, use
             "timestamp": firestore.SERVER_TIMESTAMP,
             "match_id": match_id, "match": match_name, "match_date": match_date,
             "league": league, "home_prob": home_p, "draw_prob": draw_p, "away_prob": away_p,
-            "actual_result": None, "user": user, "params": str(params) # BURADA ARTIK E-POSTA KAYDEDİLİYOR
+            "actual_result": None, "user": user, "params": str(params)
         })
     except: pass
 
@@ -193,10 +194,9 @@ def create_pdf(h_stats, a_stats, res, radar):
     return bytes(pdf.output(dest='S'))
 
 # -----------------------------------------------------------------------------
-# 5. ANA UYGULAMA (DASHBOARD ARAYÜZÜ)
+# 5. ANA UYGULAMA (DASHBOARD)
 # -----------------------------------------------------------------------------
 def main():
-    # CSS: Buton ve Kart Stilleri
     st.markdown("""<style>
         .stApp {background-color: #0e1117; color: #fff;}
         .stat-card {background: #1e2129; padding: 15px; border-radius: 12px; text-align: center; border: 1px solid #333;}
@@ -210,7 +210,7 @@ def main():
         }
     </style>""", unsafe_allow_html=True)
 
-    # --- HERO SECTION & DASHBOARD ---
+    # HERO & KPI
     st.markdown("""
     <div style="text-align: center; padding-bottom: 20px;">
         <h1 style="color: #00ff88; font-size: 42px; margin-bottom: 0;">QUANTUM FOOTBALL</h1>
@@ -218,25 +218,24 @@ def main():
     </div>
     """, unsafe_allow_html=True)
 
-    # KPI Göstergeleri
     k1, k2, k3, k4 = st.columns(4)
     with k1: st.metric("🎯 AI Doğruluk", "%74.2", "v7.3")
     with k2: st.metric("🧠 Simülasyon", "50K+", "Maç Başı")
     with k3: st.metric("🌍 Kapsam", "8 Lig", "Global")
-    with k4: st.metric("👤 Kullanıcı", current_user.split('@')[0], "Aktif")
+    
+    # KULLANICI ADINI BURAYA YAZDIRIYORUZ
+    display_name = current_user.split('@')[0] if '@' in current_user else current_user
+    with k4: st.metric("👤 Kullanıcı", display_name, "Aktif")
     
     st.markdown("---")
 
-    # API Kontrol
     api_key = st.secrets.get("FOOTBALL_API_KEY")
     if not api_key: st.error("API Key Bulunamadı"); st.stop()
 
-    # Data Manager
     dm = DataManager(api_key)
 
-    # YAN YANA SEÇİM EKRANI
+    # SEÇİM EKRANI (YAN YANA)
     col_lig, col_mac = st.columns([1, 2])
-    
     with col_lig:
         lid_key = st.selectbox("🏆 Lig Seçiniz", list(CONSTANTS["LEAGUES"].keys()))
         lid = CONSTANTS["LEAGUES"][lid_key]
@@ -245,7 +244,6 @@ def main():
     if not standings: st.error("Veri Alınamadı"); st.stop()
     
     upcoming = [m for m in fixtures.get('matches',[]) if m['status'] in ['SCHEDULED','TIMED']]
-    
     if upcoming:
         m_map = {}
         for m in upcoming:
@@ -253,15 +251,13 @@ def main():
             except: dt = "-"
             label = f"⚽ {m['homeTeam']['name']} vs {m['awayTeam']['name']} ({dt})"
             m_map[label] = m
-            
         with col_mac:
             match_name = st.selectbox("📅 Maç Seçiniz", list(m_map.keys()))
             m = m_map[match_name]
     else:
-        st.info("Bu ligde planlanmış maç yok.")
-        st.stop()
+        st.info("Bu ligde planlanmış maç yok."); st.stop()
 
-    # DETAYLI AYARLAR
+    # AYARLAR
     with st.expander("⚙️ Simülasyon Parametreleri"):
         c1, c2 = st.columns(2)
         with c1:
@@ -282,7 +278,6 @@ def main():
         h_stats = dm.get_stats(standings, fixtures, m['homeTeam']['id'])
         a_stats = dm.get_stats(standings, fixtures, m['awayTeam']['id'])
         avg = 2.8
-        
         params = {"sim_count": 500000, "t_h": t_h, "t_a": t_a, "weather": weather, 
                   "hk": hk, "hgk": hgk, "ak": ak, "agk": agk}
         
@@ -290,14 +285,10 @@ def main():
             h_g, a_g, xg = engine.run_simulation(h_stats, a_stats, avg, params, 1.08)
             res = engine.analyze(h_g, a_g, 500000)
             
-            st.session_state['results'] = {
-                'res': res, 'h_stats': h_stats, 'a_stats': a_stats, 'avg': avg, 
-                'match_name': match_name
-            }
-            # KULLANICI E-POSTASI İLE KAYDET
+            st.session_state['results'] = {'res': res, 'h_stats': h_stats, 'a_stats': a_stats, 'avg': avg, 'match_name': match_name}
             save_prediction(m['id'], match_name, m['utcDate'], lid, res['1x2'], params, current_user)
 
-    # SONUÇ GÖSTERİMİ
+    # SONUÇLAR
     if 'results' in st.session_state and st.session_state['results']:
         data = st.session_state['results']
         res = data['res']
@@ -311,23 +302,16 @@ def main():
         c3.markdown(f"<div class='stat-card'><img src='{a_stats['crest']}' width='60'><br><b>{a_stats['name']}</b><br><span class='big-num' style='color:#ff4444'>%{res['1x2'][2]:.1f}</span></div>", unsafe_allow_html=True)
         
         st.progress(res['1x2'][0]/100)
-
         t1, t2, t3 = st.tabs(["📊 Analitik", "🔥 Skor Matrisi", "⏱️ İY / MS"])
         
         with t1:
             col_a, col_b = st.columns(2)
             with col_a:
-                st.write(f"⚽ **2.5 Üst:** %{res['over_25']:.1f}")
-                st.progress(res['over_25']/100)
-                st.write(f"🔄 **KG Var:** %{res['btts']:.1f}")
-                st.progress(res['btts']/100)
-                
+                st.write(f"⚽ **2.5 Üst:** %{res['over_25']:.1f}"); st.progress(res['over_25']/100)
+                st.write(f"🔄 **KG Var:** %{res['btts']:.1f}"); st.progress(res['btts']/100)
                 eng = AnalyticsEngine()
-                h_dna = eng.determine_dna(h_stats['gf'], h_stats['ga'], data['avg'])
-                a_dna = eng.determine_dna(a_stats['gf'], a_stats['ga'], data['avg'])
-                st.info(f"🧬 Takım Karakteri: {h_dna} vs {a_dna}")
-            with col_b:
-                st.plotly_chart(create_radar(h_stats, a_stats, data['avg']), use_container_width=True)
+                st.info(f"🧬 Takım Karakteri: {eng.determine_dna(h_stats['gf'], h_stats['ga'], data['avg'])} vs {eng.determine_dna(a_stats['gf'], a_stats['ga'], data['avg'])}")
+            with col_b: st.plotly_chart(create_radar(h_stats, a_stats, data['avg']), use_container_width=True)
 
         with t2:
             fig = go.Figure(data=go.Heatmap(z=res['matrix'], colorscale='Magma', x=[0,1,2,3,4,5,"6+"], y=[0,1,2,3,4,5,"6+"]))
@@ -341,7 +325,6 @@ def main():
         pdf_bytes = create_pdf(h_stats, a_stats, res, create_radar(h_stats, a_stats, data['avg']))
         st.download_button("📄 PDF Raporu İndir", pdf_bytes, "Analiz.pdf", "application/pdf", use_container_width=True)
 
-    # GEÇMİŞ (ALTTA)
     st.divider()
     with st.expander("📜 Son Analizler (Firebase)", expanded=False):
         if db:
