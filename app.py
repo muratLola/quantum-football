@@ -49,11 +49,11 @@ def mask_user(email):
 
 CONSTANTS = {
     "API_URL": "https://api.football-data.org/v4",
-    "HOME_ADVANTAGE": 1.08, 
-    "RHO": -0.13,
+    "HOME_ADVANTAGE": 1.12, 
+    "RHO": -0.10, 
     "TACTICS": {
-        "Dengeli": (1.0, 1.0), "Hücum": (1.20, 1.15),
-        "Savunma": (0.65, 0.60), "Kontra": (0.90, 0.80)
+        "Dengeli": (1.0, 1.0), "Hücum": (1.25, 1.15),
+        "Savunma": (0.65, 0.60), "Kontra": (0.95, 0.85)
     },
     "WEATHER": {"Normal": 1.0, "Yağmurlu": 0.95, "Karlı": 0.85, "Sıcak": 0.92},
     "LEAGUES": {
@@ -79,10 +79,49 @@ def save_prediction(match_id, match_name, match_date, league, probs, params, use
     except: pass
 
 # -----------------------------------------------------------------------------
-# 3. ANALİZ VE KARAR MOTORU
+# 3. ANALİZ VE KARAR MOTORU (OTOMATİK GÜÇ HESAPLAMA)
 # -----------------------------------------------------------------------------
 class AnalyticsEngine:
     def __init__(self): self.rng = np.random.default_rng()
+
+    # --- YENİ OTOMATİK GÜÇ HESAPLAYICI ---
+    def calculate_auto_power(self, h_stats, a_stats):
+        """
+        Takımların puan durumu ve averajına bakarak otomatik güç farkı belirler.
+        Return: -3 (Dep çok güçlü) ile +3 (Ev çok güçlü) arası bir sayı.
+        """
+        # Veri güvenliği (Maç oynanmadıysa 0 döndür)
+        if h_stats['played'] < 2 or a_stats['played'] < 2:
+            return 0, "Yetersiz Veri (Dengeli Varsayıldı)"
+
+        # 1. Puan Başına Maç (Points Per Game)
+        h_ppg = h_stats['points'] / h_stats['played']
+        a_ppg = a_stats['points'] / a_stats['played']
+        
+        # 2. Averaj Gücü (Goal Diff Per Game)
+        h_gd_pg = (h_stats['gf'] - h_stats['ga']) # Zaten maç başına normalize gelmişti ama ham averaj daha iyi
+        # Not: get_stats fonksiyonunda gf/ga maç başına geliyor. O yüzden direkt fark alabiliriz.
+        h_net_str = h_stats['gf'] - h_stats['ga']
+        a_net_str = a_stats['gf'] - a_stats['ga']
+
+        # Skor Hesaplama (PPG daha değerli)
+        h_score = (h_ppg * 2.0) + h_net_str
+        a_score = (a_ppg * 2.0) + a_net_str
+        
+        diff = h_score - a_score
+        
+        # Farkı -3 ile +3 arasına eşle
+        power_val = 0
+        status_msg = "Dengeli"
+        
+        if diff > 1.5: power_val = 3; status_msg = f"🔥 {h_stats['name']} Çok Üstün"
+        elif diff > 0.8: power_val = 2; status_msg = f"💪 {h_stats['name']} Güçlü"
+        elif diff > 0.3: power_val = 1; status_msg = f"📈 {h_stats['name']} Avantajlı"
+        elif diff < -1.5: power_val = -3; status_msg = f"🔥 {a_stats['name']} Çok Üstün"
+        elif diff < -0.8: power_val = -2; status_msg = f"💪 {a_stats['name']} Güçlü"
+        elif diff < -0.3: power_val = -1; status_msg = f"📈 {a_stats['name']} Avantajlı"
+        
+        return power_val, status_msg
 
     def determine_dna(self, gf, ga, avg_g):
         att = gf / avg_g; def_ = ga / avg_g
@@ -99,8 +138,14 @@ class AnalyticsEngine:
 
     def run_simulation(self, h_stats, a_stats, avg_g, params, adv):
         sims = params['sim_count']
-        base_h = (h_stats['gf']/avg_g) * (a_stats['ga']/avg_g) * avg_g * adv
-        base_a = (a_stats['gf']/avg_g) * (h_stats['ga']/avg_g) * avg_g
+        
+        h_gf = max(h_stats['gf'], 1.2)
+        h_ga = max(h_stats['ga'], 0.8)
+        a_gf = max(a_stats['gf'], 1.0)
+        a_ga = max(a_stats['ga'], 0.9)
+
+        base_h = (h_gf/avg_g) * (a_ga/avg_g) * avg_g * adv
+        base_a = (a_gf/avg_g) * (h_ga/avg_g) * avg_g
         
         th = CONSTANTS["TACTICS"][params['t_h']]; ta = CONSTANTS["TACTICS"][params['t_a']]
         w = CONSTANTS["WEATHER"][params['weather']]
@@ -112,6 +157,16 @@ class AnalyticsEngine:
         if params['hgk']: xg_a *= 1.2
         if params['ak']: xg_a *= 0.8
         if params['agk']: xg_h *= 1.2
+        
+        # OTOMATİK GÜÇ FARKI UYGULAMA
+        power_diff = params.get('power_diff', 0)
+        
+        if power_diff > 0: 
+            xg_h *= (1 + (power_diff * 0.15)) 
+            xg_a *= (1 - (power_diff * 0.10))
+        elif power_diff < 0:
+            xg_a *= (1 + (abs(power_diff) * 0.15))
+            xg_h *= (1 - (abs(power_diff) * 0.10))
 
         h_goals = self.rng.poisson(xg_h, sims)
         a_goals = self.rng.poisson(xg_a, sims)
@@ -142,7 +197,7 @@ class AnalyticsEngine:
             "htft": htft.to_dict(), "most_likely": most_likely_score
         }
 
-    def decision_engine(self, res, h_stats, a_stats, params):
+    def decision_engine(self, res, h_stats, a_stats, params, power_msg):
         decisions = {"safe": [], "risky": [], "avoid": [], "reasons": []}
         
         probs = res['1x2']
@@ -168,15 +223,17 @@ class AnalyticsEngine:
             decisions['avoid'].append("Maç Sonucu (1X2)")
             decisions['reasons'].append("Maç sonucu belirsizliği yüksek (Kaotik).")
 
+        # Otomatik Güç Mesajını Ekle
+        if "Dengeli" not in power_msg:
+             decisions['reasons'].append(f"Otomatik Analiz: {power_msg}")
+
         if h_stats['gf'] > 2.0: decisions['reasons'].append("Ev sahibi hücum gücü çok yüksek.")
-        if a_stats['ga'] > 1.8: decisions['reasons'].append("Deplasman savunması kırılgan.")
-        if params['hk'] or params['ak']: decisions['reasons'].append("Kritik eksikler simülasyonu etkiledi.")
         if confidence_score < 50: decisions['reasons'].append("Veri seti tutarsız, volatilite yüksek.")
 
         return decisions, confidence_score
 
 # -----------------------------------------------------------------------------
-# 4. GÖRSELLEŞTİRME & PDF (HATA DÜZELTİLDİ)
+# 4. GÖRSELLEŞTİRME & PDF
 # -----------------------------------------------------------------------------
 def check_font():
     font_path = "DejaVuSans.ttf"
@@ -184,8 +241,7 @@ def check_font():
         url = "https://github.com/coreybutler/fonts/raw/master/ttf/DejaVuSans.ttf"
         try: 
             urllib.request.urlretrieve(url, font_path)
-            if os.path.getsize(font_path) < 1000: # Dosya bozuksa sil
-                os.remove(font_path)
+            if os.path.getsize(font_path) < 1000: os.remove(font_path)
         except: pass
     return font_path
 
@@ -198,13 +254,23 @@ class DataManager:
             r2 = requests.get(f"{CONSTANTS['API_URL']}/competitions/{league}/matches", headers=_self.headers)
             return r1.json(), r2.json()
         except: return None, None
+        
+    # STATS ALIRKEN ARTIK PUAN VE MAÇ SAYISINI DA ÇEKİYORUZ
     def get_stats(self, s, m, tid):
         for st_ in s.get('standings',[]):
             if st_['type']=='TOTAL':
                 for t in st_['table']:
                     if t['team']['id']==tid:
-                        return {"name":t['team']['name'], "gf":t['goalsFor']/t['playedGames'], "ga":t['goalsAgainst']/t['playedGames'], "crest":t['team'].get('crest','')}
-        return {"name":"Takım", "gf":1.3, "ga":1.3, "crest":""}
+                        return {
+                            "name":t['team']['name'], 
+                            "gf":t['goalsFor']/t['playedGames'], 
+                            "ga":t['goalsAgainst']/t['playedGames'], 
+                            "points": t['points'],
+                            "played": t['playedGames'],
+                            "crest":t['team'].get('crest','')
+                        }
+        # Veri bulunamazsa varsayılan
+        return {"name":"Takım", "gf":1.3, "ga":1.3, "points": 10, "played": 10, "crest":""}
 
 def create_radar(h_stats, a_stats, avg):
     def n(v): return min(max(v/avg*50, 20), 99)
@@ -227,20 +293,12 @@ def create_pdf(h_stats, a_stats, res, radar, decisions):
             font_loaded = True
         except: pass
 
-    if not font_loaded:
-        pdf.set_font("Arial", "B", 16)
+    if not font_loaded: pdf.set_font("Arial", "B", 16)
     
-    # --- KURŞUN GEÇİRMEZ METİN FONKSİYONU ---
-    # Eğer font yüklenemezse Türkçe karakterleri temizler (Örn: ğ -> g)
     def safe_txt(text):
-        if font_loaded: return text # Font varsa elleme
-        # Font yoksa temizle
-        replacements = {
-            "ğ":"g", "Ğ":"G", "ı":"i", "İ":"I", "ş":"s", "Ş":"S", 
-            "ü":"u", "Ü":"U", "ö":"o", "Ö":"O", "ç":"c", "Ç":"C"
-        }
-        for k, v in replacements.items():
-            text = text.replace(k, v)
+        if font_loaded: return text
+        replacements = {"ğ":"g", "Ğ":"G", "ı":"i", "İ":"I", "ş":"s", "Ş":"S", "ü":"u", "Ü":"U", "ö":"o", "Ö":"O", "ç":"c", "Ç":"C"}
+        for k, v in replacements.items(): text = text.replace(k, v)
         return text.encode('latin-1', 'replace').decode('latin-1')
 
     pdf.cell(0,10,safe_txt("QUANTUM FOOTBALL - KARAR RAPORU"),ln=True,align="C")
@@ -331,7 +389,7 @@ def main():
     else:
         st.info("Bu ligde planlanmış maç yok."); st.stop()
 
-    with st.expander("⚙️ Simülasyon Parametreleri"):
+    with st.expander("⚙️ Detaylı Ayarlar (Otomatik Güç Algılamalı)"):
         c1, c2 = st.columns(2)
         with c1:
             st.subheader("🏠 Ev Sahibi")
@@ -343,25 +401,32 @@ def main():
             t_a = st.selectbox("Taktik", list(CONSTANTS["TACTICS"].keys()), key="ta")
             ak = st.checkbox("Golcü Eksik", key="ak")
             agk = st.checkbox("Kaleci Eksik", key="agk")
+        
         weather = st.selectbox("Hava Durumu", list(CONSTANTS["WEATHER"].keys()))
+        # SLIDER YOK EDİLDİ, SİSTEM KENDİ YAPACAK
 
     if st.button("🚀 ANALİZİ BAŞLAT", use_container_width=True):
         engine = AnalyticsEngine()
         h_stats = dm.get_stats(standings, fixtures, m['homeTeam']['id'])
         a_stats = dm.get_stats(standings, fixtures, m['awayTeam']['id'])
-        avg = 2.8
-        params = {"sim_count": 500000, "t_h": t_h, "t_a": t_a, "weather": weather, 
-                  "hk": hk, "hgk": hgk, "ak": ak, "agk": agk}
+        avg = 2.9
         
-        with st.spinner("Kuantum motoru çalışıyor... Karar mekanizması devreye giriyor..."):
-            h_g, a_g, xg = engine.run_simulation(h_stats, a_stats, avg, params, 1.08)
+        # --- OTOMATİK GÜÇ HESAPLAMA ---
+        power_diff, power_msg = engine.calculate_auto_power(h_stats, a_stats)
+        
+        params = {"sim_count": 500000, "t_h": t_h, "t_a": t_a, "weather": weather, 
+                  "hk": hk, "hgk": hgk, "ak": ak, "agk": agk, "power_diff": power_diff}
+        
+        with st.spinner(f"Kuantum motoru çalışıyor... {power_msg}"):
+            h_g, a_g, xg = engine.run_simulation(h_stats, a_stats, avg, params, 1.12)
             res = engine.analyze(h_g, a_g, 500000)
             
-            decisions, confidence = engine.decision_engine(res, h_stats, a_stats, params)
+            decisions, confidence = engine.decision_engine(res, h_stats, a_stats, params, power_msg)
             
             st.session_state['results'] = {
                 'res': res, 'h_stats': h_stats, 'a_stats': a_stats, 'avg': avg, 
-                'match_name': match_name, 'decisions': decisions, 'confidence': confidence
+                'match_name': match_name, 'decisions': decisions, 'confidence': confidence,
+                'power_msg': power_msg
             }
             save_prediction(m['id'], match_name, m['utcDate'], lid, res['1x2'], params, current_user)
 
@@ -372,8 +437,13 @@ def main():
         a_stats = data['a_stats']
         decisions = data['decisions']
         confidence = data['confidence']
+        power_msg = data['power_msg']
         
         st.divider()
+        # SİSTEM TESPİT MESAJI (EN ÜSTE)
+        if "Dengeli" not in power_msg:
+             st.info(f"⚡ **SİSTEM TESPİTİ:** {power_msg} (Simülasyona yansıtıldı)")
+        
         c1, c2, c3 = st.columns(3)
         c1.markdown(f"<div class='stat-card'><img src='{h_stats['crest']}' width='60'><br><b>{h_stats['name']}</b><br><span class='big-num'>%{res['1x2'][0]:.1f}</span></div>", unsafe_allow_html=True)
         c2.markdown(f"<div class='stat-card'><br>BERABERLİK<br><span class='big-num' style='color:#ccc'>%{res['1x2'][1]:.1f}</span></div>", unsafe_allow_html=True)
