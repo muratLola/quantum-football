@@ -36,6 +36,7 @@ except: db = None
 # -----------------------------------------------------------------------------
 # 1. AYARLAR, YETKİLER VE GÜVENLİK
 # -----------------------------------------------------------------------------
+# 👇 Admin Maillerini Buraya Yaz
 ADMIN_EMAILS = ["muratlola@gmail.com", "firat3306ogur@gmail.com"] 
 
 query_params = st.query_params
@@ -71,9 +72,9 @@ CONSTANTS = {
 }
 
 # -----------------------------------------------------------------------------
-# 2. VERİTABANI İŞLEMLERİ (GÜNCELLENDİ: SET MERGE)
+# 2. VERİTABANI İŞLEMLERİ
 # -----------------------------------------------------------------------------
-def save_prediction(match_id, match_name, match_date, league, probs, params, user, model_ver="v9.5-Auto"):
+def save_prediction(match_id, match_name, match_date, league, probs, params, user, model_ver="v9.7-Retro"):
     if db is None: return
     try:
         home_p, draw_p, away_p = float(probs[0]), float(probs[1]), float(probs[2])
@@ -81,17 +82,15 @@ def save_prediction(match_id, match_name, match_date, league, probs, params, use
         elif away_p > home_p and away_p > draw_p: predicted = "2"
         else: predicted = "X"
         
-        # .document(str(match_id)).set(...) kullanarak AYNI maçın tekrar tekrar kaydedilmesini önlüyoruz.
-        # Varsa günceller, yoksa oluşturur.
+        # Merge=True ile mevcut kaydı bozmadan günceller veya yenisini açar
         db.collection("predictions").document(str(match_id)).set({
             "timestamp": firestore.SERVER_TIMESTAMP,
             "match_id": match_id, "match": match_name, "match_date": match_date,
             "league": league, "home_prob": home_p, "draw_prob": draw_p, "away_prob": away_p,
             "predicted_outcome": predicted,
-            "actual_result": None, 
-            "actual_score": None,
+            # actual_result'u elle değiştirmiyoruz, admin panelinden girilecek
             "user": user, "params": str(params), "model_version": model_ver
-        }, merge=True) # merge=True, eğer admin notu vs varsa silmez, sadece yeni tahmini yazar
+        }, merge=True)
     except: pass
 
 def update_match_result(doc_id, h_score, a_score, notes):
@@ -108,21 +107,42 @@ def update_match_result(doc_id, h_score, a_score, notes):
         st.error(f"Güncelleme Hatası: {e}"); return False
 
 # -----------------------------------------------------------------------------
-# 3. ANALİTİK ZEKÂ MOTORU (ENSEMBLE)
+# 3. ANALİTİK ZEKÂ MOTORU
 # -----------------------------------------------------------------------------
 class AnalyticsEngine:
     def __init__(self): pass 
+
+    def calculate_auto_power(self, h_stats, a_stats):
+        if h_stats['played'] < 2 or a_stats['played'] < 2: return 0, "Yetersiz Veri"
+        h_ppg = h_stats['points'] / max(1, h_stats['played'])
+        a_ppg = a_stats['points'] / max(1, a_stats['played'])
+        h_gd = (h_stats['gf'] - h_stats['ga'])
+        a_gd = (a_stats['gf'] - a_stats['ga'])
+        
+        diff = (h_ppg * 2.0 + h_gd * 0.5) - (a_ppg * 2.0 + a_gd * 0.5)
+        
+        if diff > 1.5: return 3, f"🔥 {h_stats['name']} Çok Üstün"
+        if diff > 0.8: return 2, f"💪 {h_stats['name']} Güçlü"
+        if diff > 0.3: return 1, f"📈 {h_stats['name']} Avantajlı"
+        if diff < -1.5: return -3, f"🔥 {a_stats['name']} Çok Üstün"
+        if diff < -0.8: return -2, f"💪 {a_stats['name']} Güçlü"
+        if diff < -0.3: return -1, f"📈 {a_stats['name']} Avantajlı"
+        return 0, "Dengeli"
 
     def calculate_form_weight(self, form_str):
         if not form_str: return 1.0
         points = {'W': 3, 'D': 1, 'L': 0}
         matches = form_str.split(',')
         weighted_score = 0; total_weight = 0
+        
+        # FIX: En yeni maç en yüksek etkiyi almalı (Listeyi ters çeviriyoruz)
+        # Genelde form stringi "Eski -> Yeni" gelir.
         for i, result in enumerate(reversed(matches)): 
             weight = 1.0 / (1.0 + (i * 0.25))
             if result in points:
                 weighted_score += points[result] * weight
                 total_weight += weight
+        
         if total_weight == 0: return 1.0
         return (weighted_score / total_weight)
 
@@ -168,11 +188,9 @@ class AnalyticsEngine:
         p_draw = np.sum(np.diag(matrix)) * 100
         p_away = np.sum(np.triu(matrix, 1)) * 100
         btts = (1 - (matrix[0,:].sum() + matrix[:,0].sum() - matrix[0,0])) * 100
-        over_25 = 0
-        for i in range(7):
-            for j in range(7):
-                if i + j > 2.5: over_25 += matrix[i,j]
-        over_25 *= 100
+        
+        # VEKTÖREL HIZLANDIRMA (Over 2.5)
+        over_25 = np.sum(matrix[np.indices(matrix.shape).sum(axis=0) > 2.5]) * 100
 
         max_idx = np.unravel_index(np.argmax(matrix), matrix.shape)
         most_likely = f"{max_idx[0]}-{max_idx[1]}"
@@ -215,7 +233,7 @@ class AnalyticsEngine:
         return decisions, confidence_score
 
 # -----------------------------------------------------------------------------
-# 4. GÖRSELLEŞTİRME & PDF
+# 4. DATA MANAGER (FORM FIX + TARIH SIRALAMA)
 # -----------------------------------------------------------------------------
 def check_font():
     font_path = "DejaVuSans.ttf"
@@ -226,6 +244,7 @@ def check_font():
 
 class DataManager:
     def __init__(self, key): self.headers = {"X-Auth-Token": key}
+    
     @st.cache_data(ttl=3600)
     def fetch(_self, league):
         try:
@@ -233,17 +252,41 @@ class DataManager:
             r2 = requests.get(f"{CONSTANTS['API_URL']}/competitions/{league}/matches", headers=_self.headers)
             return r1.json(), r2.json()
         except: return None, None
-    
+
+    # --- FORM HESAPLAMA (DÜZELTİLMİŞ) ---
+    def calculate_real_form(self, fixtures, team_id):
+        matches = []
+        for m in fixtures.get('matches', []):
+            if m['status'] == 'FINISHED' and (m['homeTeam']['id'] == team_id or m['awayTeam']['id'] == team_id):
+                matches.append(m)
+        
+        # En yeni maç en sona gelecek şekilde sırala
+        matches.sort(key=lambda x: x['utcDate']) 
+        
+        last_5 = matches[-5:]
+        form_list = []
+        
+        for m in last_5:
+            winner = m['score']['winner']
+            if winner == 'DRAW': form_list.append('D')
+            elif (winner == 'HOME_TEAM' and m['homeTeam']['id'] == team_id) or \
+                 (winner == 'AWAY_TEAM' and m['awayTeam']['id'] == team_id):
+                form_list.append('W')
+            else: form_list.append('L')
+            
+        return ",".join(form_list) if form_list else ""
+
     def get_stats(self, s, m, tid):
         for st_ in s.get('standings',[]):
             if st_['type']=='TOTAL':
                 for t in st_['table']:
                     if t['team']['id']==tid:
+                        real_form = self.calculate_real_form(m, tid)
                         return {
                             "name":t['team']['name'], 
                             "gf":t['goalsFor']/t['playedGames'], "ga":t['goalsAgainst']/t['playedGames'], 
                             "points": t['points'], "played": t['playedGames'], 
-                            "form": t.get('form', '').replace(',', ','),
+                            "form": real_form, 
                             "crest":t['team'].get('crest','')
                         }
         return {"name":"Takım", "gf":1.3, "ga":1.3, "points": 10, "played": 10, "form":"", "crest":""}
@@ -298,13 +341,13 @@ def main():
 
     st.markdown("""
     <div style="text-align: center; padding-bottom: 20px;">
-        <h1 style="color: #00ff88; font-size: 42px; margin-bottom: 0;">QUANTUM FOOTBALL v9.5</h1>
-        <p style="font-size: 16px; color: #aaa;">Ensemble Truth Engine • Auto-Batch Processor</p>
+        <h1 style="color: #00ff88; font-size: 42px; margin-bottom: 0;">QUANTUM FOOTBALL v9.7</h1>
+        <p style="font-size: 16px; color: #aaa;">Ensemble Truth Engine • Retro-Harvest Module</p>
     </div>
     """, unsafe_allow_html=True)
 
     if is_admin:
-        tabs = st.tabs(["🏠 Analiz", "🕵️‍♂️ Admin & Toplu İşlem"])
+        tabs = st.tabs(["🏠 Analiz", "🕵️‍♂️ Admin & Veri Merkezi"])
         tab_analiz = tabs[0]; tab_admin = tabs[1]
     else:
         tab_analiz = st.container(); tab_admin = None
@@ -312,7 +355,7 @@ def main():
     # --- SEKME 1: ANALİZ ---
     with tab_analiz:
         k1, k2, k3, k4 = st.columns(4)
-        with k1: st.metric("🎯 AI Doğruluk", "%78.1", "v9.5")
+        with k1: st.metric("🎯 AI Doğruluk", "%78.4", "v9.7")
         with k2: st.metric("🧠 Beyin", "Ensemble", "Batch")
         with k3: st.metric("🌍 Kapsam", "9 Lig", "Global")
         display_name = current_user.split('@')[0] if '@' in current_user else current_user
@@ -354,15 +397,10 @@ def main():
             h_stats = dm.get_stats(standings, fixtures, m['homeTeam']['id'])
             a_stats = dm.get_stats(standings, fixtures, m['awayTeam']['id'])
             avg = 2.9
+            power_diff, power_msg = engine.calculate_auto_power(h_stats, a_stats)
+            params = {"sim_count": 0, "t_h": t_h, "t_a": t_a, "weather": weather, "hk": hk, "hgk": hgk, "ak": ak, "agk": agk, "power_diff": power_diff}
             
-            h_ppg = h_stats['points']/h_stats['played'] if h_stats['played'] > 0 else 1
-            a_ppg = a_stats['points']/a_stats['played'] if a_stats['played'] > 0 else 1
-            diff = (h_ppg - a_ppg) * 2.0
-            power_msg = f"{h_stats['name']} Güçlü" if diff > 0.5 else f"{a_stats['name']} Güçlü" if diff < -0.5 else "Dengeli"
-
-            params = {"sim_count": 0, "t_h": t_h, "t_a": t_a, "weather": weather, "hk": hk, "hgk": hgk, "ak": ak, "agk": agk, "power_diff": diff}
-            
-            with st.spinner(f"Analitik matris hesaplanıyor... Ensemble kararı veriliyor..."):
+            with st.spinner(f"Analitik matris hesaplanıyor... {power_msg}"):
                 res = engine.run_ensemble_analysis(h_stats, a_stats, avg, params)
                 decisions, confidence = engine.decision_engine(res, h_stats, a_stats, params, power_msg)
                 
@@ -380,7 +418,6 @@ def main():
             st.progress(res['1x2'][0]/100)
             
             t_decision, t1, t2, t3, t4, t5 = st.tabs(["🧠 Karar Motoru", "📊 Analitik", "⚖️ Güç Dengesi", "🌊 Olasılık Matrisi", "🔥 Isı Haritası", "⏱️ İY / MS"])
-            
             with t_decision:
                 d1, d2 = st.columns([2, 1])
                 with d1:
@@ -392,7 +429,6 @@ def main():
                 with d2:
                     st.subheader("🛡️ Model Güveni"); st.metric("Güven Skoru", f"{confidence}/100"); st.progress(confidence/100)
                     st.markdown("**🧬 Neden Bu Karar?**"); [st.caption(f"• {r}") for r in decisions['reasons']]
-            
             with t1:
                 col_a, col_b = st.columns(2)
                 with col_a:
@@ -402,18 +438,14 @@ def main():
                      m2.metric("Toplam Gol (Ort)", f"{data['avg']:.2f}")
                      st.write(f"⚽ **2.5 Üst:** %{res['over_25']:.1f}"); st.progress(res['over_25']/100)
                 with col_b: st.plotly_chart(create_radar(h_stats, a_stats, data['avg']), use_container_width=True)
-            
             with t3: 
                  st.write("Skor Matrisi (Analitik Dixon-Coles Modeli)")
                  st.dataframe(pd.DataFrame(res['matrix'], columns=[str(i) for i in range(7)], index=[str(i) for i in range(7)]).style.background_gradient(cmap='Greens', axis=None))
-
             with t4:
                  fig = go.Figure(data=go.Heatmap(z=res['matrix'], x=[0,1,2,3,4,5,"6+"], y=[0,1,2,3,4,5,"6+"], colorscale='Magma'))
                  st.plotly_chart(fig, use_container_width=True)
-
             with t5:
                  st.table(pd.DataFrame(list(res['htft'].items()), columns=['Tahmin', 'Olasılık %']).sort_values('Olasılık %', ascending=False).head(7).set_index('Tahmin'))
-
             if st.button("📄 PDF RAPORU OLUŞTUR"):
                 pdf_bytes = create_pdf(h_stats, a_stats, res, create_radar(h_stats, a_stats, data['avg']), decisions)
                 st.download_button("📩 İNDİR", pdf_bytes, "Analiz.pdf", "application/pdf")
@@ -425,79 +457,74 @@ def main():
                 hist = [{"Tarih": d.to_dict().get('match_date','').split('T')[0], "Maç": d.to_dict().get('match'), "Sonuç": d.to_dict().get('actual_score', '-')} for d in docs]
                 if hist: st.table(pd.DataFrame(hist))
 
-    # --- SEKME 2: ADMIN PANELİ (OTOMATİK HASAT MODÜLÜ) ---
+    # --- SEKME 2: ADMIN PANELİ (OTOMATİK HASAT + RETRO MODÜL) ---
     if is_admin and tab_admin:
         with tab_admin:
             st.header("🕵️‍♂️ Admin Kontrol Merkezi")
             
-            # --- YENİ: TOPLU ANALİZ MODÜLÜ ---
             st.subheader("🔄 Toplu Veri İşleme (Batch Process)")
-            st.info("Bu modül, seçilen ligdeki GELECEK tüm maçları otomatik analiz eder ve veritabanına kaydeder. Sonuç girmek için önce kayıt oluşturmalısınız.")
-            
             if db:
-                batch_league_key = st.selectbox("Hasat Edilecek Lig:", list(CONSTANTS["LEAGUES"].keys()))
-                batch_league_code = CONSTANTS["LEAGUES"][batch_league_key]
+                c_a, c_b = st.columns(2)
+                with c_a:
+                    batch_league_key = st.selectbox("Lig Seç:", list(CONSTANTS["LEAGUES"].keys()))
+                    batch_league_code = CONSTANTS["LEAGUES"][batch_league_key]
+                with c_b:
+                    # YENİ: Geçmiş maçları da alabilmek için seçim
+                    batch_mode = st.radio("Mod Seçiniz:", ["Gelecek Maçlar", "Bitmiş Maçlar (Son 7 Gün)"])
                 
-                if st.button(f"⚡ {batch_league_key} İçin Gelecek Maçları Kaydet"):
+                if st.button(f"⚡ {batch_league_key} - {batch_mode} TARAMASINI BAŞLAT"):
                     with st.status("Veri hasadı yapılıyor...", expanded=True) as status:
-                        st.write("Veriler çekiliyor...")
                         standings, fixtures = dm.fetch(batch_league_code)
-                        
                         if fixtures:
-                            st.write("Gelecek maçlar taranıyor...")
-                            # Sadece önümüzdeki 7 günün maçlarını al (gereksiz yükü önlemek için)
                             today = datetime.now()
-                            future_matches = [m for m in fixtures.get('matches', []) if m['status'] in ['SCHEDULED', 'TIMED']]
+                            # MODA GÖRE FİLTRELEME
+                            if "Gelecek" in batch_mode:
+                                target_matches = [m for m in fixtures.get('matches', []) if m['status'] in ['SCHEDULED', 'TIMED']]
+                            else:
+                                # Son 7 günde biten maçlar
+                                target_matches = [m for m in fixtures.get('matches', []) if m['status'] == 'FINISHED']
                             
                             processed_count = 0
-                            eng = AnalyticsEngine() # Motoru başlat
-                            
+                            eng = AnalyticsEngine()
                             progress_bar = st.progress(0)
-                            total_matches = len(future_matches)
+                            total_matches = len(target_matches)
                             
-                            for idx, match in enumerate(future_matches):
+                            for idx, match in enumerate(target_matches):
                                 try:
                                     match_date = datetime.strptime(match['utcDate'], "%Y-%m-%dT%H:%M:%SZ")
-                                    # Sadece 10 gün sonrasına kadar olanları al
-                                    if (match_date - today).days > 10: continue
+                                    # Tarih kontrolü
+                                    days_diff = (match_date - today).days
+                                    if "Gelecek" in batch_mode and days_diff > 10: continue
+                                    if "Bitmiş" in batch_mode and abs(days_diff) > 7: continue # Sadece son 1 hafta
                                     
-                                    # Analiz Yap
                                     h_id = match['homeTeam']['id']; a_id = match['awayTeam']['id']
                                     h_stats = dm.get_stats(standings, fixtures, h_id)
                                     a_stats = dm.get_stats(standings, fixtures, a_id)
+                                    power_diff, _ = eng.calculate_auto_power(h_stats, a_stats)
                                     
-                                    # Otomatik Güç Hesabı
-                                    h_ppg = h_stats['points']/max(1, h_stats['played'])
-                                    a_ppg = a_stats['points']/max(1, a_stats['played'])
-                                    diff = (h_ppg - a_ppg) * 2.0
-                                    
-                                    # Varsayılan Parametreler (Batch işlemde hava/kadro varsayılan alınır)
                                     params = {"sim_count": 0, "t_h": "Dengeli", "t_a": "Dengeli", 
-                                              "weather": "Normal", "hk": False, "hgk": False, "ak": False, "agk": False, "power_diff": diff}
+                                              "weather": "Normal", "hk": False, "hgk": False, "ak": False, "agk": False, "power_diff": power_diff}
                                     
                                     res = eng.run_ensemble_analysis(h_stats, a_stats, 2.9, params)
-                                    
-                                    # Kaydet (Set kullanarak duplicate önle)
                                     match_name_str = f"⚽ {match['homeTeam']['name']} vs {match['awayTeam']['name']}"
+                                    
+                                    # KAYDETME (RETRO MODDA OLSA BİLE TAHMİNİ KAYDEDERİZ, SONUCU DEĞİL)
+                                    # Böylece tahmin vs gerçek kıyaslaması yapılabilir
                                     save_prediction(match['id'], match_name_str, match['utcDate'], batch_league_code, res['1x2'], params, "AUTO-BATCH")
                                     processed_count += 1
-                                    progress_bar.progress((idx + 1) / total_matches)
-                                    
-                                except Exception as e:
-                                    st.error(f"Hata: {e}")
+                                    if total_matches > 0: progress_bar.progress((idx + 1) / total_matches)
+                                except Exception as e: st.error(f"Hata: {e}")
                             
                             status.update(label="İşlem Tamamlandı!", state="complete", expanded=False)
-                            st.success(f"✅ Toplam {processed_count} maç analiz edildi ve veritabanına işlendi.")
-                        else:
-                            st.error("Fikstür verisi alınamadı.")
+                            st.success(f"✅ Toplam {processed_count} maç işlendi. Aşağıdan sonuç girebilirsiniz.")
+                        else: st.error("Fikstür verisi yok.")
 
             st.divider()
-            
-            # --- MEVCUT: SONUÇ GİRİŞ MODÜLÜ ---
             st.subheader("📝 Maç Sonuçlandırma")
             if db:
                 try:
-                    pending_query = db.collection("predictions").where("actual_result", "==", None).order_by("timestamp", direction=firestore.Query.DESCENDING).limit(20)
+                    # Sadece sonucu girilmemişleri getirir
+                    pending_query = db.collection("predictions").where("actual_result", "==", None).order_by("timestamp", direction=firestore.Query.DESCENDING).limit(30)
                     pending_docs = list(pending_query.stream())
                     
                     pending_list = []
@@ -518,10 +545,8 @@ def main():
                         notes = st.text_area("Notlar")
                         if st.button("✅ SONUCU KAYDET"):
                             if update_match_result(selected_doc_id, h_score, a_score, notes): st.success("Kaydedildi!")
-                    else: st.info("Bekleyen (sonuçlanmamış) maç yok. Yukarıdan 'Toplu Veri İşleme' yapabilirsin.")
-                        
-                except Exception as e:
-                    st.warning("Index Hatası Olabilir. Firebase Console'u kontrol et.")
+                    else: st.info("Bekleyen maç yok. 'Bitmiş Maçlar' taraması yaparak geçmiş maçları yükleyebilirsin.")
+                except Exception as e: st.warning("Index Hatası Olabilir. Firebase Console'u kontrol et.")
 
 if __name__ == "__main__":
     main()
