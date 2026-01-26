@@ -18,7 +18,7 @@ from firebase_admin import credentials, firestore
 import matplotlib.pyplot as plt
 
 # --- 0. SİSTEM YAPILANDIRMASI ---
-MODEL_VERSION = "v13.1-Production"
+MODEL_VERSION = "v13.2-Stable"
 SYSTEM_PURPOSE = """
 ⚠️ YASAL UYARI:
 Bu sistem (Quantum Football), istatistiksel veri simülasyonu yapan bir analiz aracıdır.
@@ -282,7 +282,7 @@ def update_result_db(doc_id, hg, ag, notes):
         res = "1" if hg > ag else "2" if ag > hg else "X"
         idx = 0 if res == "1" else 1 if res == "X" else 2
         
-        # Brier Score Hesapla
+        # Brier Score
         probs = [d.get("home_prob"), d.get("draw_prob"), d.get("away_prob")]
         brier = 0.0
         if None not in probs:
@@ -290,10 +290,16 @@ def update_result_db(doc_id, hg, ag, notes):
             o_vec = np.array([0,0,0]); o_vec[idx] = 1
             brier = np.sum((p_vec - o_vec)**2)
 
-        # Elo Update
-        elo = EloManager(db)
-        if "home_id" in d and "away_id" in d:
-            elo.update(d["home_id"], d["match_name"].split(" vs ")[0], d["away_id"], d["match_name"].split(" vs ")[1], hg, ag)
+        # Elo Update (Güvenli Erişim)
+        # Eğer match_name varsa oradan split et, yoksa 'match' anahtarından dene
+        match_str = d.get("match_name") or d.get("match", "Unknown vs Unknown")
+        if " vs " in match_str:
+            home_name = match_str.split(" vs ")[0]
+            away_name = match_str.split(" vs ")[1]
+            
+            elo = EloManager(db)
+            if "home_id" in d and "away_id" in d:
+                elo.update(d["home_id"], home_name, d["away_id"], away_name, hg, ag)
             
         ref.update({
             "actual_result": res, "actual_score": f"{hg}-{ag}", 
@@ -301,7 +307,7 @@ def update_result_db(doc_id, hg, ag, notes):
             "admin_notes": notes
         })
         return True
-    except Exception as e: st.error(str(e)); return False
+    except Exception as e: st.error(f"Kayıt Hatası: {e}"); return False
 
 def save_pred_db(match, probs, params, user, meta):
     if not db: return
@@ -446,7 +452,6 @@ def main():
         with tabs[1]:
             st.header("🗃️ Admin Paneli")
             
-            # --- YENİ ÖZELLİK: TOPLU LİG ANALİZİ (AUTO-HARVEST) ---
             with st.expander("⚡ Toplu İşlem Merkezi (Simülasyon)", expanded=True):
                 st.write("Seçili ligdeki **gelecek tüm maçları** otomatik analiz edip veritabanına kaydeder.")
                 if f:
@@ -459,23 +464,16 @@ def main():
                             try:
                                 h_id, a_id = tm['homeTeam']['id'], tm['awayTeam']['id']
                                 hs = dm.get_stats(s, f, h_id); as_ = dm.get_stats(s, f, a_id)
-                                
-                                # Basit varsayılan analiz
                                 pars = {"t_h": (1,1), "t_a": (1,1), "weather": 1.0, "hk": False, "ak": False, "hgk": False, "agk": False, "power_diff": 0}
-                                # DQI
-                                dqi = 100
+                                dqi = 100; 
                                 if hs['played'] < 5: dqi -= 20
-                                
                                 res = eng.run_ensemble_analysis(hs, as_, 2.8, pars, h_id, a_id, lc)
                                 conf = int(max(res['1x2']) * (dqi/100.0))
-                                
                                 meta = {"hn": hs['name'], "an": as_['name'], "hid": h_id, "aid": a_id, "lg": lc, "conf": conf, "dqi": dqi}
                                 save_pred_db(tm, res['1x2'], pars, "Auto-Batch", meta)
                                 count += 1
-                            except Exception as e:
-                                pass # Sessiz devam et
+                            except Exception as e: pass 
                             progress_bar.progress((i + 1) / len(target_matches))
-                        
                         st.success(f"✅ İşlem Tamamlandı: {count} maç veritabanına eklendi.")
 
             st.divider()
@@ -483,14 +481,26 @@ def main():
             
             if db:
                 pend = list(db.collection("predictions").where("actual_result", "==", None).limit(30).stream())
+                
+                # --- FIX: GÜVENLİ LİSTE OLUŞTURMA (KeyError Önlemek İçin) ---
+                match_options = {}
+                for d in pend:
+                    data = d.to_dict()
+                    # Eski kayıt (match) veya yeni kayıt (match_name) kontrolü
+                    label = data.get('match_name') or data.get('match') or f"Maç {d.id}"
+                    date = data.get('match_date', '')[:10]
+                    match_options[d.id] = f"{label} ({date})"
+
                 if pend:
-                    sel = st.selectbox("Sonuçlanacak Maç", [d.id for d in pend], format_func=lambda x: [p for p in pend if p.id==x][0].to_dict()['match_name'])
+                    # Selectbox'a sadece ID'leri veriyoruz, format_func ile ismi gösteriyoruz
+                    sel_id = st.selectbox("Sonuçlanacak Maç", list(match_options.keys()), format_func=lambda x: match_options[x])
+                    
                     c1, c2 = st.columns(2)
                     hs = c1.number_input("Ev Gol", 0); as_ = c2.number_input("Dep Gol", 0)
                     note = st.text_area("Admin Notu (Opsiyonel)")
                     
                     if st.button("✅ Onayla ve Eğit"):
-                        if update_result_db(sel, hs, as_, note): 
+                        if update_result_db(sel_id, hs, as_, note): 
                             st.success("Sonuç işlendi. Elo güncellendi. Brier Score veritabanına yazıldı.")
                 else: st.info("Bekleyen açık tahmin bulunamadı.")
                 
