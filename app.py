@@ -16,11 +16,11 @@ import hashlib
 # --- SAYFA AYARLARI ---
 st.set_page_config(page_title="Quantum Football AI", page_icon="🧠", layout="wide")
 
-# --- GÜVENLİK AYARLARI (TOKEN SİSTEMİ) ---
-# Burası senin "Gizli Anahtarın". Bunu kimse bilmemeli.
+# --- GÜVENLİK AYARLARI (SADECE KİLİT) ---
+# Buradaki şifre, senin token üretirken kullandığınla AYNI olmalı
 AUTH_SALT = st.secrets.get("auth_salt", "quantum_gizli_anahtar_2026_xYz") 
 
-# Admin Mailleri
+# Yetkili Mailler
 ADMIN_EMAILS = ["muratlola@gmail.com", "firat3306ogur@gmail.com"] 
 
 # --- LOGGING ---
@@ -43,31 +43,24 @@ try: db = firestore.client()
 except: db = None
 
 # -----------------------------------------------------------------------------
-# 1. KİMLİK DOĞRULAMA (AUTH)
+# 1. KİMLİK DOĞRULAMA (SADECE KONTROL - ÜRETİM YOK)
 # -----------------------------------------------------------------------------
 query_params = st.query_params
 current_user = query_params.get("user_email", "Misafir_User")
 provided_token = query_params.get("token", None)
 
 def is_valid_admin(email, token):
-    """E-posta ve Salt kullanarak Token doğrular."""
     if not token: return False
-    # HMAC-SHA256 ile şifreleme
+    # Server tarafında doğrulama (Kullanıcı bunu göremez)
     expected = hmac.new(AUTH_SALT.encode(), email.lower().strip().encode(), hashlib.sha256).hexdigest()
-    # Zaman saldırılarına karşı güvenli karşılaştırma
     return hmac.compare_digest(expected, token)
 
-# Admin Yetki Kontrolü
 is_admin = False
 if "@" in current_user:
     clean_email = current_user.lower().strip()
-    # 1. E-posta listede mi? 2. Token doğru mu?
     if clean_email in [a.lower() for a in ADMIN_EMAILS]:
         if is_valid_admin(clean_email, provided_token):
             is_admin = True
-        else:
-            # E-posta doğru ama Token yanlış/yoksa uyarı vermiyoruz (Güvenlik gereği)
-            pass
 
 def mask_user(email):
     if not email or "@" not in email: return "Misafir"
@@ -95,7 +88,7 @@ CONSTANTS = {
 # -----------------------------------------------------------------------------
 # 2. VERİTABANI İŞLEMLERİ
 # -----------------------------------------------------------------------------
-def save_prediction(match_id, match_name, match_date, league, probs, params, user, model_ver="v9.9-Secure"):
+def save_prediction(match_id, match_name, match_date, league, probs, params, user, model_ver="v10.0-Secure"):
     if db is None: return
     try:
         home_p, draw_p, away_p = float(probs[0]), float(probs[1]), float(probs[2])
@@ -352,18 +345,9 @@ def main():
         div.stButton > button:first-child:hover { background-color: #00cc6a; color: #fff; box-shadow: 0 0 15px #00ff88; }
     </style>""", unsafe_allow_html=True)
 
-    # --- SIDEBAR: TOKEN ÜRETİCİ (GEÇİCİ) ---
-    with st.sidebar.expander("🔑 Token Oluştur (Sadece Admin)"):
-        st.write("E-postanı gir, token al.")
-        test_email = st.text_input("E-Posta:")
-        if test_email and st.button("Üret"):
-            gen_token = hmac.new(AUTH_SALT.encode(), test_email.lower().strip().encode(), hashlib.sha256).hexdigest()
-            st.code(f"?user_email={test_email}&token={gen_token}", language="text")
-            st.info("Bu linki kopyala ve tarayıcıya yapıştır.")
-
     st.markdown("""
     <div style="text-align: center; padding-bottom: 20px;">
-        <h1 style="color: #00ff88; font-size: 42px; margin-bottom: 0;">QUANTUM FOOTBALL v9.9</h1>
+        <h1 style="color: #00ff88; font-size: 42px; margin-bottom: 0;">QUANTUM FOOTBALL v10.0</h1>
         <p style="font-size: 16px; color: #aaa;">Secure • Ensemble • Analytic Matrix</p>
     </div>
     """, unsafe_allow_html=True)
@@ -377,7 +361,7 @@ def main():
     # --- SEKME 1: ANALİZ ---
     with tab_analiz:
         k1, k2, k3, k4 = st.columns(4)
-        with k1: st.metric("🎯 AI Doğruluk", "%78.6", "v9.9")
+        with k1: st.metric("🎯 AI Doğruluk", "%78.6", "v10.0")
         with k2: st.metric("🧠 Beyin", "Ensemble", "Secure")
         with k3: st.metric("🌍 Kapsam", "9 Lig", "Global")
         display_name = current_user.split('@')[0] if '@' in current_user else current_user
@@ -491,7 +475,6 @@ def main():
                     batch_league_key = st.selectbox("Lig Seç:", list(CONSTANTS["LEAGUES"].keys()))
                     batch_league_code = CONSTANTS["LEAGUES"][batch_league_key]
                 with c_b:
-                    # YENİ: Geçmiş maçları da alabilmek için seçim
                     batch_mode = st.radio("Mod Seçiniz:", ["Gelecek Maçlar", "Bitmiş Maçlar (Son 7 Gün)"])
                 
                 if st.button(f"⚡ {batch_league_key} - {batch_mode} TARAMASINI BAŞLAT"):
@@ -499,11 +482,9 @@ def main():
                         standings, fixtures = dm.fetch(batch_league_code)
                         if fixtures:
                             today = datetime.now()
-                            # MODA GÖRE FİLTRELEME
                             if "Gelecek" in batch_mode:
                                 target_matches = [m for m in fixtures.get('matches', []) if m['status'] in ['SCHEDULED', 'TIMED']]
                             else:
-                                # Son 7 günde biten maçlar
                                 target_matches = [m for m in fixtures.get('matches', []) if m['status'] == 'FINISHED']
                             
                             processed_count = 0
@@ -515,7 +496,6 @@ def main():
                             for idx, match in enumerate(target_matches):
                                 try:
                                     match_date = datetime.strptime(match['utcDate'], "%Y-%m-%dT%H:%M:%SZ")
-                                    # Tarih kontrolü
                                     days_diff = (match_date - today).days
                                     if "Gelecek" in batch_mode and days_diff > 10: continue
                                     if "Bitmiş" in batch_mode and abs(days_diff) > 7: continue 
@@ -547,7 +527,6 @@ def main():
             st.subheader("📝 Maç Sonuçlandırma")
             if db:
                 try:
-                    # Sadece sonucu girilmemişleri getirir
                     pending_query = db.collection("predictions").where("actual_result", "==", None).order_by("timestamp", direction=firestore.Query.DESCENDING).limit(30)
                     pending_docs = list(pending_query.stream())
                     
