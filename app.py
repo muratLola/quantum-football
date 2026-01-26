@@ -18,14 +18,14 @@ from firebase_admin import credentials, firestore
 import matplotlib.pyplot as plt
 
 # --- 0. SİSTEM YAPILANDIRMASI ---
-MODEL_VERSION = "v13.0-Scientific"
+MODEL_VERSION = "v13.1-Production"
 SYSTEM_PURPOSE = """
-⚠️ ARAŞTIRMA VE EĞİTİM AMAÇLIDIR.
-Bu sistem (Quantum Football), olasılıksal modelleme ve veri simülasyonu yapan bir laboratuvar projesidir.
-Bahis, iddaa veya finansal tavsiye vermez. Çıktılar istatistiksel projeksiyonlardır.
+⚠️ YASAL UYARI:
+Bu sistem (Quantum Football), istatistiksel veri simülasyonu yapan bir analiz aracıdır.
+Kesinlikle bahis, iddaa veya finansal yatırım tavsiyesi vermez.
 """
 
-st.set_page_config(page_title="Quantum Research Lab", page_icon="🧬", layout="wide")
+st.set_page_config(page_title="QUANTUM FOOTBALL", page_icon="⚽", layout="wide")
 np.random.seed(42)
 
 # --- GÜVENLİK ---
@@ -74,7 +74,7 @@ LEAGUE_PROFILES = {
 # 1. KİMLİK DOĞRULAMA
 # -----------------------------------------------------------------------------
 query_params = st.query_params
-current_user = query_params.get("user_email", "Guest_Researcher")
+current_user = query_params.get("user_email", "Guest")
 provided_token = query_params.get("token", None)
 
 def is_valid_admin(email, token):
@@ -89,23 +89,17 @@ if "@" in current_user:
         if is_valid_admin(clean_email, provided_token): is_admin = True
 
 # -----------------------------------------------------------------------------
-# 2. CORE ENGINE (ANALİTİK & BİLİMSEL KATMAN)
+# 2. CORE ENGINE
 # -----------------------------------------------------------------------------
 class AnalyticsEngine:
     def __init__(self, elo_manager=None): 
         self.elo_manager = elo_manager
 
     def calculate_confidence_interval(self, mu, alpha=0.90):
-        """
-        SCIENTIFIC FEATURE: Poisson dağılımı için güven aralığı hesaplar.
-        """
         low, high = poisson.interval(alpha, mu)
         return int(low), int(high)
 
     def calculate_ht_ft_probs(self, p_home, p_draw, p_away):
-        """
-        RESTORED FEATURE: İY/MS Olasılıkları (Heuristik Matris)
-        """
         return {
             "1/1": p_home * 0.58, "X/1": p_home * 0.28, "2/1": p_home * 0.14,
             "1/X": p_draw * 0.18, "X/X": p_draw * 0.64, "2/X": p_draw * 0.18,
@@ -113,7 +107,6 @@ class AnalyticsEngine:
         }
 
     def run_ensemble_analysis(self, h_stats, a_stats, avg_g, params, h_id, a_id, league_code):
-        # 1. Lig & Elo Etkisi
         l_prof = LEAGUE_PROFILES.get(league_code, LEAGUE_PROFILES["DEFAULT"])
         elo_h = 1500; elo_a = 1500
         elo_impact = 0
@@ -122,25 +115,21 @@ class AnalyticsEngine:
             elo_a = self.elo_manager.get_elo(a_id, a_stats['name'])
             elo_impact = ((elo_h - elo_a) / 100.0) * 0.06
 
-        # 2. Form & Power
         h_form = h_stats.get('form_factor', 1.0); a_form = a_stats.get('form_factor', 1.0)
         form_impact = (h_form - a_form) * 0.18
         power_impact = params.get('power_diff', 0) * 0.12
 
-        # 3. xG (Gol Beklentisi) Hesabı
         base_h = (h_stats['gf']/avg_g) * (a_stats['ga']/avg_g) * avg_g * CONSTANTS["HOME_ADVANTAGE"]
         base_a = (a_stats['gf']/avg_g) * (h_stats['ga']/avg_g) * avg_g
         
         xg_h = base_h * l_prof["pace"] * params['t_h'][0] * params['t_a'][1] * (1 + elo_impact + form_impact + power_impact)
         xg_a = base_a * l_prof["pace"] * params['t_a'][0] * params['t_h'][1] * (1 - elo_impact - form_impact - power_impact)
         
-        # Taktiksel Manuel Müdahaleler
         if params['hk']: xg_h *= 0.85
         if params['hgk']: xg_a *= 1.15
         if params['ak']: xg_a *= 0.85
         if params['agk']: xg_h *= 1.15
 
-        # 4. Dixon-Coles Matrisi (Olasılık Dağılımı)
         h_probs = poisson.pmf(np.arange(7), xg_h)
         a_probs = poisson.pmf(np.arange(7), xg_a)
         matrix = np.outer(h_probs, a_probs)
@@ -152,12 +141,10 @@ class AnalyticsEngine:
         matrix[1,1] *= (1 - rho)
         matrix[matrix < 0] = 0; matrix /= matrix.sum()
 
-        # 5. Olasılık Çıktıları
         p_home = np.sum(np.tril(matrix, -1)) * 100
         p_draw = np.sum(np.diag(matrix)) * 100
         p_away = np.sum(np.triu(matrix, 1)) * 100
         
-        # Gol Olasılıkları (RESTORED - Alt/Üst)
         rows, cols = np.indices(matrix.shape)
         total_goals = rows + cols
         
@@ -166,10 +153,8 @@ class AnalyticsEngine:
         over_35 = np.sum(matrix[total_goals > 3.5]) * 100
         btts = (1 - (matrix[0,:].sum() + matrix[:,0].sum() - matrix[0,0])) * 100
         
-        # İY / MS Hesapla (RESTORED)
         ht_ft = self.calculate_ht_ft_probs(p_home, p_draw, p_away)
         
-        # Güven Aralıkları (SCIENTIFIC NEW)
         ci_h = self.calculate_confidence_interval(xg_h)
         ci_a = self.calculate_confidence_interval(xg_a)
 
@@ -186,19 +171,8 @@ class AnalyticsEngine:
             "elo": (elo_h, elo_a)
         }
 
-    def calculate_brier_score(self, probs, outcome_idx):
-        """
-        SCIENTIFIC FEATURE: Brier Score
-        Modelin tahmin performansını (0 ile 2 arasında) ölçer. 0 mükemmeldir.
-        """
-        p_vector = [probs[0]/100, probs[1]/100, probs[2]/100]
-        o_vector = [0, 0, 0]
-        o_vector[outcome_idx] = 1
-        return np.sum((np.array(p_vector) - np.array(o_vector))**2)
-
     def calculate_auto_power(self, h_stats, a_stats):
         if h_stats['played'] < 2: return 0, "Yetersiz Veri"
-        # PPG (Maç başı puan) x 2 + Averaj
         h_val = (h_stats['points']/h_stats['played'])*2.0 + (h_stats['gf']-h_stats['ga'])/h_stats['played']
         a_val = (a_stats['points']/a_stats['played'])*2.0 + (a_stats['gf']-a_stats['ga'])/a_stats['played']
         diff = h_val - a_val
@@ -271,14 +245,13 @@ def check_font():
     return fp
 
 def create_model_card():
-    """SCIENTIFIC FEATURE: Modelin çalışma prensibini anlatan PDF"""
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", "B", 16)
     pdf.cell(0, 10, f"MODEL CARD: {MODEL_VERSION}", ln=True, align="C")
     pdf.set_font("Arial", "", 12)
     pdf.ln(10)
-    pdf.multi_cell(0, 10, "TYPE: Probabilistic Ensemble (Dixon-Coles + Elo + Form)\n\nINTENDED USE: Academic Research & Decision Support\n\nINPUTS: Goals per match, Time-decayed form, Elo ratings, Contextual factors.\n\nMETRICS: Brier Score, Calibration Error, MAE.\n\nOUTPUTS: Full-time probabilities, 95% Confidence Intervals, Goal Markets.\n\nETHICS: Non-gambling, strictly for statistical analysis.")
+    pdf.multi_cell(0, 10, "TYPE: Probabilistic Ensemble (Dixon-Coles + Elo + Form)\n\nINTENDED USE: Decision Support\n\nINPUTS: Goals per match, Time-decayed form, Elo ratings, Contextual factors.\n\nMETRICS: Brier Score, Calibration Error, MAE.\n\nOUTPUTS: Full-time probabilities, 95% Confidence Intervals, Goal Markets.\n\nETHICS: Non-gambling, strictly for statistical analysis.")
     return pdf.output(dest='S').encode('latin-1')
 
 def create_match_pdf(h, a, res, conf):
@@ -287,7 +260,7 @@ def create_match_pdf(h, a, res, conf):
     else: pdf.set_font("Arial","",12)
     def s(t): return t.encode('latin-1','replace').decode('latin-1')
     
-    pdf.cell(0,10,s(f"RESEARCH REPORT: {h['name']} vs {a['name']}"),ln=True,align="C")
+    pdf.cell(0,10,s(f"QUANTUM FOOTBALL REPORT: {h['name']} vs {a['name']}"),ln=True,align="C")
     pdf.cell(0,10,s(f"Confidence: {conf}/100 | Elo: {res['elo'][0]} vs {res['elo'][1]}"),ln=True)
     pdf.ln(5)
     pdf.cell(0,10,s(f"1X2: {res['1x2'][0]:.1f}% - {res['1x2'][1]:.1f}% - {res['1x2'][2]:.1f}%"),ln=True)
@@ -309,7 +282,7 @@ def update_result_db(doc_id, hg, ag, notes):
         res = "1" if hg > ag else "2" if ag > hg else "X"
         idx = 0 if res == "1" else 1 if res == "X" else 2
         
-        # Brier Score Hesapla (Bilimsel Metrik)
+        # Brier Score Hesapla
         probs = [d.get("home_prob"), d.get("draw_prob"), d.get("away_prob")]
         brier = 0.0
         if None not in probs:
@@ -354,12 +327,11 @@ def main():
         .card {background:#1e2129; padding:15px; border-radius:10px; margin-bottom:10px;}
     </style>""", unsafe_allow_html=True)
     
-    st.title("🔬 Quantum Research Lab v13")
-    st.caption("Scientific Ultimate Edition: Brier Scores, Confidence Intervals & Model Cards")
+    st.title("QUANTUM FOOTBALL")
     st.info(SYSTEM_PURPOSE)
 
     if is_admin:
-        tabs = st.tabs(["📊 Analiz", "🗃️ Veri Merkezi", "📘 Model Kimliği"])
+        tabs = st.tabs(["📊 Simülasyon", "🗃️ Admin Paneli", "📘 Model Kimliği"])
     else: tabs = [st.container()]
 
     # TAB 1: ANALİZ
@@ -385,7 +357,7 @@ def main():
                     th = pc1.selectbox("Ev Taktik", list(CONSTANTS["TACTICS"].keys()))
                     ta = pc2.selectbox("Dep Taktik", list(CONSTANTS["TACTICS"].keys()))
                 
-                if st.button("🧪 BİLİMSEL ANALİZ BAŞLAT"):
+                if st.button("🚀 SİMÜLASYONU BAŞLAT"):
                     hid, aid = m['homeTeam']['id'], m['awayTeam']['id']
                     hs = dm.get_stats(s, f, hid); as_ = dm.get_stats(s, f, aid)
                     
@@ -467,16 +439,50 @@ def main():
                         st.table(pd.DataFrame(gol_data).set_index("Piyasa"))
 
                     p_bytes = create_match_pdf(hs, as_, res, conf)
-                    st.download_button("📥 Akademik Raporu İndir (PDF)", p_bytes, "analiz_v13.pdf", "application/pdf")
+                    st.download_button("📥 Raporu İndir (PDF)", p_bytes, "analiz_v13.pdf", "application/pdf")
 
-    # TAB 2: ADMIN (DATA MINING & BRIER SCORE)
+    # TAB 2: ADMIN (BATCH & RESULTS)
     if is_admin and len(tabs) > 1:
         with tabs[1]:
-            st.header("🗃️ Veri Madenciliği ve Doğrulama")
-            st.markdown("Burada girilen sonuçlar, **Brier Score (Hata Kareleri Ortalaması)** hesaplayarak modelin kalibrasyonunu ölçer.")
+            st.header("🗃️ Admin Paneli")
+            
+            # --- YENİ ÖZELLİK: TOPLU LİG ANALİZİ (AUTO-HARVEST) ---
+            with st.expander("⚡ Toplu İşlem Merkezi (Simülasyon)", expanded=True):
+                st.write("Seçili ligdeki **gelecek tüm maçları** otomatik analiz edip veritabanına kaydeder.")
+                if f:
+                    if st.button("⚡ TÜM LİGİ ANALİZ ET VE KAYDET"):
+                        target_matches = [m for m in f['matches'] if m['status'] in ['SCHEDULED', 'TIMED']]
+                        progress_bar = st.progress(0)
+                        count = 0
+                        
+                        for i, tm in enumerate(target_matches):
+                            try:
+                                h_id, a_id = tm['homeTeam']['id'], tm['awayTeam']['id']
+                                hs = dm.get_stats(s, f, h_id); as_ = dm.get_stats(s, f, a_id)
+                                
+                                # Basit varsayılan analiz
+                                pars = {"t_h": (1,1), "t_a": (1,1), "weather": 1.0, "hk": False, "ak": False, "hgk": False, "agk": False, "power_diff": 0}
+                                # DQI
+                                dqi = 100
+                                if hs['played'] < 5: dqi -= 20
+                                
+                                res = eng.run_ensemble_analysis(hs, as_, 2.8, pars, h_id, a_id, lc)
+                                conf = int(max(res['1x2']) * (dqi/100.0))
+                                
+                                meta = {"hn": hs['name'], "an": as_['name'], "hid": h_id, "aid": a_id, "lg": lc, "conf": conf, "dqi": dqi}
+                                save_pred_db(tm, res['1x2'], pars, "Auto-Batch", meta)
+                                count += 1
+                            except Exception as e:
+                                pass # Sessiz devam et
+                            progress_bar.progress((i + 1) / len(target_matches))
+                        
+                        st.success(f"✅ İşlem Tamamlandı: {count} maç veritabanına eklendi.")
+
+            st.divider()
+            st.subheader("📝 Sonuç Doğrulama")
             
             if db:
-                pend = list(db.collection("predictions").where("actual_result", "==", None).limit(20).stream())
+                pend = list(db.collection("predictions").where("actual_result", "==", None).limit(30).stream())
                 if pend:
                     sel = st.selectbox("Sonuçlanacak Maç", [d.id for d in pend], format_func=lambda x: [p for p in pend if p.id==x][0].to_dict()['match_name'])
                     c1, c2 = st.columns(2)
