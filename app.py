@@ -17,7 +17,6 @@ import hashlib
 st.set_page_config(page_title="Quantum Football AI", page_icon="🧠", layout="wide")
 
 # --- GÜVENLİK AYARLARI ---
-# Kendi bilgisayarında ürettiğin Token'daki SALT ile burası AYNI olmalı.
 AUTH_SALT = st.secrets.get("auth_salt", "quantum_gizli_anahtar_2026_xYz") 
 ADMIN_EMAILS = ["muratlola@gmail.com", "firat3306ogur@gmail.com"] 
 
@@ -85,7 +84,7 @@ CONSTANTS = {
 # -----------------------------------------------------------------------------
 # 2. VERİTABANI İŞLEMLERİ
 # -----------------------------------------------------------------------------
-def save_prediction(match_id, match_name, match_date, league, probs, params, user, model_ver="v10.1-Fix"):
+def save_prediction(match_id, match_name, match_date, league, probs, params, user, model_ver="v10.2-Stable"):
     if db is None: return
     try:
         home_p, draw_p, away_p = float(probs[0]), float(probs[1]), float(probs[2])
@@ -122,33 +121,32 @@ def update_match_result(doc_id, h_score, a_score, notes):
 class AnalyticsEngine:
     def __init__(self): pass 
 
-    # --- GÜÇ DENGESİ (DÜZELTİLDİ) ---
+    # --- GÜÇ DENGESİ (İyileştirilmiş) ---
     def calculate_auto_power(self, h_stats, a_stats):
-        # Maç sayısı çok azsa bile (en az 1) hesaplamaya çalış
         if h_stats.get('played', 0) < 1 or a_stats.get('played', 0) < 1:
             return 0, "Yetersiz Veri (Sezon Başı)"
             
-        # Puan Ortalaması (En önemli kriter)
+        # Puan Ortalaması (0-3 arası)
         h_ppg = h_stats['points'] / h_stats['played']
         a_ppg = a_stats['points'] / a_stats['played']
         
-        # Averaj Gücü (Atılan - Yenilen) - Zaten maç başına normalize geliyordu
-        h_net = h_stats['gf'] - h_stats['ga']
-        a_net = a_stats['gf'] - a_stats['ga']
+        # Maç Başına Averaj (Daha adil karşılaştırma için)
+        # Önceki kodda toplam averaj vardı, maç sayısı artınca sapıtıyordu.
+        h_avg_gd = (h_stats['gf'] - h_stats['ga']) / h_stats['played']
+        a_avg_gd = (a_stats['gf'] - a_stats['ga']) / a_stats['played']
         
-        # Skor Formülü: (PPG * 2.5) + (Net Averaj * 1.0)
-        h_score = (h_ppg * 2.5) + h_net
-        a_score = (a_ppg * 2.5) + a_net
+        # Skor: PPG daha değerli (x2.0), Averaj destekleyici (x1.0)
+        h_score = (h_ppg * 2.0) + h_avg_gd
+        a_score = (a_ppg * 2.0) + a_avg_gd
         
         diff = h_score - a_score
         
-        # Eşikler düşürüldü ki daha kolay tetiklensin
-        if diff > 1.2: return 3, f"🔥 {h_stats['name']} Çok Üstün"
-        if diff > 0.6: return 2, f"💪 {h_stats['name']} Güçlü"
+        if diff > 1.0: return 3, f"🔥 {h_stats['name']} Çok Üstün"
+        if diff > 0.5: return 2, f"💪 {h_stats['name']} Güçlü"
         if diff > 0.2: return 1, f"📈 {h_stats['name']} Avantajlı"
         
-        if diff < -1.2: return -3, f"🔥 {a_stats['name']} Çok Üstün"
-        if diff < -0.6: return -2, f"💪 {a_stats['name']} Güçlü"
+        if diff < -1.0: return -3, f"🔥 {a_stats['name']} Çok Üstün"
+        if diff < -0.5: return -2, f"💪 {a_stats['name']} Güçlü"
         if diff < -0.2: return -1, f"📈 {a_stats['name']} Avantajlı"
         
         return 0, "Dengeli"
@@ -159,9 +157,7 @@ class AnalyticsEngine:
         matches = form_str.split(',')
         weighted_score = 0; total_weight = 0
         
-        # Listeyi olduğu gibi işle (Data Manager'da zaten tarihe göre sıraladık)
         for i, result in enumerate(matches): 
-            # i=0 en yeni maç olmalı (Data Manager'da ona göre ayarladık)
             weight = 1.0 / (1.0 + (i * 0.3)) 
             if result in points:
                 weighted_score += points[result] * weight
@@ -186,12 +182,10 @@ class AnalyticsEngine:
         h_gf = max(h_stats['gf'], 1.1); h_ga = max(h_stats['ga'], 0.8)
         a_gf = max(a_stats['gf'], 1.0); a_ga = max(a_stats['ga'], 0.9)
         
-        # Form
-        h_form = self.calculate_form_weight(h_stats.get('form', ''))
-        a_form = self.calculate_form_weight(a_stats.get('form', ''))
-        form_diff = (h_form - a_form) * 0.15 
+        h_form_factor = h_stats.get('form_factor', 1.0)
+        a_form_factor = a_stats.get('form_factor', 1.0)
+        form_diff = (h_form_factor - a_form_factor) * 0.15 
         
-        # Güç (Otomatik hesaplanan değer buraya geliyor)
         power_factor = params.get('power_diff', 0) * 0.15
         
         xg_h = (h_gf / avg_g) * (a_ga / avg_g) * avg_g * CONSTANTS["HOME_ADVANTAGE"]
@@ -200,7 +194,6 @@ class AnalyticsEngine:
         th = CONSTANTS["TACTICS"][params['t_h']]; ta = CONSTANTS["TACTICS"][params['t_a']]
         w = CONSTANTS["WEATHER"][params['weather']]
         
-        # Form + Güç + Taktik + Hava
         xg_h = xg_h * th[0] * ta[1] * w * (1 + power_factor + form_diff)
         xg_a = xg_a * ta[0] * th[1] * w * (1 - power_factor - form_diff)
         
@@ -261,7 +254,7 @@ class AnalyticsEngine:
         return decisions, confidence_score
 
 # -----------------------------------------------------------------------------
-# 4. DATA MANAGER (FORM DÜZELTME)
+# 4. DATA MANAGER
 # -----------------------------------------------------------------------------
 def check_font():
     font_path = "DejaVuSans.ttf"
@@ -272,7 +265,6 @@ def check_font():
 
 class DataManager:
     def __init__(self, key): self.headers = {"X-Auth-Token": key}
-    
     @st.cache_data(ttl=3600)
     def fetch(_self, league):
         try:
@@ -287,12 +279,9 @@ class DataManager:
             if m['status'] == 'FINISHED' and (m['homeTeam']['id'] == team_id or m['awayTeam']['id'] == team_id):
                 matches.append(m)
         
-        # En yeni maç en BAŞTA (0. index) olsun ki ağırlık verirken kolay olsun
         matches.sort(key=lambda x: x['utcDate'], reverse=True) 
-        
         last_5 = matches[:5]
         form_list = []
-        
         for m in last_5:
             winner = m['score']['winner']
             if winner == 'DRAW': form_list.append('D')
@@ -300,7 +289,6 @@ class DataManager:
                  (winner == 'AWAY_TEAM' and m['awayTeam']['id'] == team_id):
                 form_list.append('W')
             else: form_list.append('L')
-            
         return ",".join(form_list) if form_list else ""
 
     def get_stats(self, s, m, tid):
@@ -309,14 +297,20 @@ class DataManager:
                 for t in st_['table']:
                     if t['team']['id']==tid:
                         real_form = self.calculate_real_form(m, tid)
+                        # Form faktörünü burada hesapla
+                        form_factor = 1.0 
+                        if real_form:
+                            pts = {'W':3, 'D':1, 'L':0}
+                            score = sum([pts.get(x,1) for x in real_form.split(',')])
+                            form_factor = 0.8 + (score/15.0)*0.5 # 0.8-1.3 arası
+                            
                         return {
                             "name":t['team']['name'], 
                             "gf":t['goalsFor']/t['playedGames'], "ga":t['goalsAgainst']/t['playedGames'], 
                             "points": t['points'], "played": t['playedGames'], 
-                            "form": real_form, 
-                            "crest":t['team'].get('crest','')
+                            "form": real_form, "form_factor": form_factor, "crest":t['team'].get('crest','')
                         }
-        return {"name":"Takım", "gf":1.3, "ga":1.3, "points": 10, "played": 10, "form":"", "crest":""}
+        return {"name":"Takım", "gf":1.3, "ga":1.3, "points": 10, "played": 10, "form":"", "form_factor":1.0, "crest":""}
 
 def create_radar(h_stats, a_stats, avg):
     def n(v): return min(max(v/avg*50, 20), 99)
@@ -329,15 +323,10 @@ def create_radar(h_stats, a_stats, avg):
 def create_pdf(h_stats, a_stats, res, radar, decisions):
     font_path = check_font()
     pdf = FPDF(); pdf.add_page()
-    
     font_loaded = False
     if os.path.exists(font_path):
-        try: 
-            pdf.add_font("DejaVu", "", font_path, uni=True)
-            pdf.set_font("DejaVu", "", 16)
-            font_loaded = True
+        try: pdf.add_font("DejaVu", "", font_path, uni=True); pdf.set_font("DejaVu", "", 16); font_loaded = True
         except: pass
-    
     if not font_loaded: pdf.set_font("Arial", "B", 16)
     
     def safe_txt(text):
@@ -346,29 +335,15 @@ def create_pdf(h_stats, a_stats, res, radar, decisions):
         for k, v in replacements.items(): text = text.replace(k, v)
         return text.encode('latin-1', 'replace').decode('latin-1')
 
-    pdf.cell(0, 10, safe_txt("QUANTUM FOOTBALL - KARAR RAPORU"), ln=True, align="C")
-    
+    pdf.cell(0,10,safe_txt("QUANTUM FOOTBALL - KARAR RAPORU"),ln=True,align="C")
     if font_loaded: pdf.set_font("DejaVu", "", 12)
     else: pdf.set_font("Arial", "", 12)
-    
-    pdf.ln(5)
-    pdf.cell(0, 10, f"Mac: {safe_txt(h_stats['name'])} vs {safe_txt(a_stats['name'])}", ln=True)
-    pdf.ln(5)
-    
-    if decisions['safe']: pdf.cell(0, 10, f"GUVENLI: {safe_txt(', '.join(decisions['safe']))}", ln=True)
-    if decisions['risky']: pdf.cell(0, 10, f"RISKLI: {safe_txt(', '.join(decisions['risky']))}", ln=True)
-    
-    pdf.ln(5)
-    pdf.cell(0, 10, f"Ev: %{res['1x2'][0]:.1f} | X: %{res['1x2'][1]:.1f} | Dep: %{res['1x2'][2]:.1f}", ln=True)
-    
-    try: 
-        img = io.BytesIO()
-        radar.write_image(img, format='png', scale=2)
-        img.seek(0)
-        pdf.image(img, x=10, y=100, w=190)
+    pdf.ln(5); pdf.cell(0,10,f"Mac: {safe_txt(h_stats['name'])} vs {safe_txt(a_stats['name'])}", ln=True); pdf.ln(5)
+    if decisions['safe']: pdf.cell(0,10,f"GUVENLI: {safe_txt(', '.join(decisions['safe']))}", ln=True)
+    if decisions['risky']: pdf.cell(0,10,f"RISKLI: {safe_txt(', '.join(decisions['risky']))}", ln=True)
+    pdf.ln(5); pdf.cell(0,10,f"Ev: %{res['1x2'][0]:.1f} | X: %{res['1x2'][1]:.1f} | Dep: %{res['1x2'][2]:.1f}",ln=True)
+    try: img = io.BytesIO(); radar.write_image(img, format='png', scale=2); img.seek(0); pdf.image(img, x=10, y=100, w=190)
     except: pass
-    
-    # PDF'i latin-1 encode ile döndürüyoruz (HATA FIX)
     return pdf.output(dest='S').encode('latin-1')
 
 # -----------------------------------------------------------------------------
@@ -389,7 +364,7 @@ def main():
 
     st.markdown("""
     <div style="text-align: center; padding-bottom: 20px;">
-        <h1 style="color: #00ff88; font-size: 42px; margin-bottom: 0;">QUANTUM FOOTBALL v10.1</h1>
+        <h1 style="color: #00ff88; font-size: 42px; margin-bottom: 0;">QUANTUM FOOTBALL v10.2</h1>
         <p style="font-size: 16px; color: #aaa;">Secure • Ensemble • Analytic Matrix • Auto-Power</p>
     </div>
     """, unsafe_allow_html=True)
@@ -403,7 +378,7 @@ def main():
     # --- SEKME 1: ANALİZ ---
     with tab_analiz:
         k1, k2, k3, k4 = st.columns(4)
-        with k1: st.metric("🎯 AI Doğruluk", "%78.6", "v10.1")
+        with k1: st.metric("🎯 AI Doğruluk", "%78.8", "v10.2")
         with k2: st.metric("🧠 Beyin", "Ensemble", "Secure")
         with k3: st.metric("🌍 Kapsam", "9 Lig", "Global")
         display_name = current_user.split('@')[0] if '@' in current_user else current_user
@@ -476,7 +451,11 @@ def main():
                     if decisions['avoid']: st.markdown(f"<div class='decision-box avoid'><h3 style='margin:0; color:#ff3333'>⛔ UZAK DUR</h3><ul>{''.join([f'<li>{x}</li>' for x in decisions['avoid']])}</ul></div>", unsafe_allow_html=True)
                 with d2:
                     st.subheader("🛡️ Model Güveni"); st.metric("Güven Skoru", f"{confidence}/100"); st.progress(confidence/100)
-                    st.markdown("**🧬 Neden Bu Karar?**"); [st.caption(f"• {r}") for r in decisions['reasons']]
+                    st.markdown("**🧬 Neden Bu Karar?**"); 
+                    # --- HATA DÜZELTME BURADA YAPILDI ---
+                    for r in decisions['reasons']:
+                        st.caption(f"• {r}")
+            
             with t1:
                 col_a, col_b = st.columns(2)
                 with col_a:
