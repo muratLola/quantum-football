@@ -18,7 +18,7 @@ from firebase_admin import credentials, firestore
 import matplotlib.pyplot as plt
 
 # --- 0. SİSTEM YAPILANDIRMASI ---
-MODEL_VERSION = "v13.2-Stable"
+MODEL_VERSION = "v13.3-AdminFix"
 SYSTEM_PURPOSE = """
 ⚠️ YASAL UYARI:
 Bu sistem (Quantum Football), istatistiksel veri simülasyonu yapan bir analiz aracıdır.
@@ -290,13 +290,11 @@ def update_result_db(doc_id, hg, ag, notes):
             o_vec = np.array([0,0,0]); o_vec[idx] = 1
             brier = np.sum((p_vec - o_vec)**2)
 
-        # Elo Update (Güvenli Erişim)
-        # Eğer match_name varsa oradan split et, yoksa 'match' anahtarından dene
+        # Elo Update
         match_str = d.get("match_name") or d.get("match", "Unknown vs Unknown")
         if " vs " in match_str:
             home_name = match_str.split(" vs ")[0]
             away_name = match_str.split(" vs ")[1]
-            
             elo = EloManager(db)
             if "home_id" in d and "away_id" in d:
                 elo.update(d["home_id"], home_name, d["away_id"], away_name, hg, ag)
@@ -366,25 +364,17 @@ def main():
                 if st.button("🚀 SİMÜLASYONU BAŞLAT"):
                     hid, aid = m['homeTeam']['id'], m['awayTeam']['id']
                     hs = dm.get_stats(s, f, hid); as_ = dm.get_stats(s, f, aid)
-                    
-                    # DQI Hesapla
-                    dqi = 100
+                    dqi = 100; 
                     if hs['played'] < 5: dqi -= 20
                     
-                    # Auto Power
                     pow_diff, pow_msg = eng.calculate_auto_power(hs, as_)
-
                     pars = {"t_h": CONSTANTS["TACTICS"][th], "t_a": CONSTANTS["TACTICS"][ta], "weather": 1.0, "hk": False, "ak": False, "hgk": False, "agk": False, "power_diff": pow_diff}
                     res = eng.run_ensemble_analysis(hs, as_, 2.8, pars, hid, aid, lc)
-                    
-                    # Güven Skoru
                     conf = int(max(res['1x2']) * (dqi/100.0))
                     
-                    # Kaydet
                     meta = {"hn": hs['name'], "an": as_['name'], "hid": hid, "aid": aid, "lg": lc, "conf": conf, "dqi": dqi}
                     save_pred_db(m, res['1x2'], pars, current_user, meta)
                     
-                    # --- GÖRSELLEŞTİRME ---
                     st.divider()
                     c_a, c_b, c_c = st.columns(3)
                     c_a.metric("Güven Skoru", f"{conf}/100", delta="Model Confidence")
@@ -392,25 +382,17 @@ def main():
                     c_c.metric("Elo Farkı", f"{res['elo'][0] - res['elo'][1]}", help="Pozitif değer ev sahibi lehinedir")
                     
                     if "Dengeli" not in pow_msg: st.caption(f"⚡ Otomatik Güç Tespiti: {pow_msg}")
-
                     st.write(f"### ⚽ Beklenen Goller (xG): {res['xg'][0]:.2f} - {res['xg'][1]:.2f}")
                     
-                    # --- GÖRSEL BONUS: ÇAN EĞRİSİ (BELL CURVE) ---
                     def plot_bell_curve(mu, team_name, ci_low, ci_high, color):
-                        x = np.arange(0, 8)
-                        y = poisson.pmf(x, mu)
-                        
+                        x = np.arange(0, 8); y = poisson.pmf(x, mu)
                         fig, ax = plt.subplots(figsize=(5, 1.5))
-                        fig.patch.set_facecolor('#0e1117')
-                        ax.set_facecolor('#0e1117')
+                        fig.patch.set_facecolor('#0e1117'); ax.set_facecolor('#0e1117')
                         ax.plot(x, y, 'o-', color=color, markersize=4, linewidth=1, alpha=0.8)
                         ax.fill_between(x, 0, y, where=(x >= ci_low) & (x <= ci_high), color=color, alpha=0.2, label='Güven Alanı')
-                        ax.spines['top'].set_visible(False)
-                        ax.spines['right'].set_visible(False)
-                        ax.spines['left'].set_color('#444')
-                        ax.spines['bottom'].set_color('#444')
-                        ax.tick_params(axis='x', colors='white')
-                        ax.tick_params(axis='y', colors='white', labelsize=8)
+                        ax.spines['top'].set_visible(False); ax.spines['right'].set_visible(False)
+                        ax.spines['left'].set_color('#444'); ax.spines['bottom'].set_color('#444')
+                        ax.tick_params(axis='x', colors='white'); ax.tick_params(axis='y', colors='white', labelsize=8)
                         ax.set_title(f"{team_name} (Beklenen: {mu:.2f})", color='white', fontsize=9, pad=2)
                         return fig
 
@@ -418,48 +400,37 @@ def main():
                     with col_g1: st.pyplot(plot_bell_curve(res['xg'][0], hs['name'], res['ci'][0][0], res['ci'][0][1], '#00ff88'), use_container_width=True)
                     with col_g2: st.pyplot(plot_bell_curve(res['xg'][1], as_['name'], res['ci'][1][0], res['ci'][1][1], '#ff4444'), use_container_width=True)
 
-                    st.info(f"**🧪 %90 Güven Aralığı (Confidence Interval):**\n"
-                            f"Model, Ev Sahibinin **[{res['ci'][0][0]} ile {res['ci'][0][1]}]** arasında, "
-                            f"Deplasmanın **[{res['ci'][1][0]} ile {res['ci'][1][1]}]** arasında gol atacağını %90 güvenle öngörüyor.")
+                    st.info(f"**🧪 %90 Güven Aralığı (Confidence Interval):**\nModel, Ev Sahibinin **[{res['ci'][0][0]}-{res['ci'][0][1]}]**, Deplasmanın **[{res['ci'][1][0]}-{res['ci'][1][1]}]** gol atacağını öngörüyor.")
                     
                     t1, t2, t3 = st.tabs(["Ana Tablo (1X2)", "İY / MS (HT/FT)", "Gol Piyasaları"])
-                    
                     with t1:
                         st.subheader("Maç Sonucu Olasılıkları")
-                        probs_df = pd.DataFrame([res['1x2']], columns=["Ev %", "Beraberlik %", "Deplasman %"])
-                        st.dataframe(probs_df, hide_index=True)
-                        st.caption(f"En Olası Skor: **{res['most_likely']}** (Matris Tepe Noktası)")
-                        
+                        st.dataframe(pd.DataFrame([res['1x2']], columns=["Ev %", "Beraberlik %", "Deplasman %"]), hide_index=True)
+                        st.caption(f"En Olası Skor: **{res['most_likely']}**")
                     with t2:
                         st.subheader("İlk Yarı / Maç Sonucu (Heuristik)")
-                        df_htft = pd.DataFrame(list(res['ht_ft'].items()), columns=['Tahmin', 'Olasılık %'])
-                        df_htft = df_htft.sort_values('Olasılık %', ascending=False).head(5)
+                        df_htft = pd.DataFrame(list(res['ht_ft'].items()), columns=['Tahmin', 'Olasılık %']).sort_values('Olasılık %', ascending=False).head(5)
                         st.table(df_htft.set_index('Tahmin'))
-                        
                     with t3:
-                        st.subheader("Gol Olasılıkları (Poisson Dağılımı)")
-                        gol_data = {
-                            "Piyasa": ["1.5 Üst", "2.5 Üst", "3.5 Üst", "KG Var (BTTS)"],
-                            "Olasılık %": [f"%{res['goals']['o15']:.1f}", f"%{res['goals']['o25']:.1f}", f"%{res['goals']['o35']:.1f}", f"%{res['goals']['btts']:.1f}"]
-                        }
+                        st.subheader("Gol Olasılıkları")
+                        gol_data = {"Piyasa": ["1.5 Üst", "2.5 Üst", "3.5 Üst", "KG Var (BTTS)"], "Olasılık %": [f"%{res['goals']['o15']:.1f}", f"%{res['goals']['o25']:.1f}", f"%{res['goals']['o35']:.1f}", f"%{res['goals']['btts']:.1f}"]}
                         st.table(pd.DataFrame(gol_data).set_index("Piyasa"))
 
                     p_bytes = create_match_pdf(hs, as_, res, conf)
                     st.download_button("📥 Raporu İndir (PDF)", p_bytes, "analiz_v13.pdf", "application/pdf")
 
-    # TAB 2: ADMIN (BATCH & RESULTS)
+    # TAB 2: ADMIN
     if is_admin and len(tabs) > 1:
         with tabs[1]:
             st.header("🗃️ Admin Paneli")
-            
             with st.expander("⚡ Toplu İşlem Merkezi (Simülasyon)", expanded=True):
-                st.write("Seçili ligdeki **gelecek tüm maçları** otomatik analiz edip veritabanına kaydeder.")
+                st.write("Seçili ligdeki **gelecek ve şu an oynanan tüm maçları** otomatik analiz eder.")
                 if f:
                     if st.button("⚡ TÜM LİGİ ANALİZ ET VE KAYDET"):
-                        target_matches = [m for m in f['matches'] if m['status'] in ['SCHEDULED', 'TIMED']]
+                        # 'IN_PLAY', 'PAUSED' statüleri eklendi (Canlı maçları da yakalamak için)
+                        target_matches = [m for m in f['matches'] if m['status'] in ['SCHEDULED', 'TIMED', 'IN_PLAY', 'PAUSED']]
                         progress_bar = st.progress(0)
                         count = 0
-                        
                         for i, tm in enumerate(target_matches):
                             try:
                                 h_id, a_id = tm['homeTeam']['id'], tm['awayTeam']['id']
@@ -478,23 +449,27 @@ def main():
 
             st.divider()
             st.subheader("📝 Sonuç Doğrulama")
-            
             if db:
-                pend = list(db.collection("predictions").where("actual_result", "==", None).limit(30).stream())
+                # Limit 200'e çıkarıldı (Daha fazla maç görmek için)
+                pend = list(db.collection("predictions").where("actual_result", "==", None).limit(200).stream())
                 
-                # --- FIX: GÜVENLİ LİSTE OLUŞTURMA (KeyError Önlemek İçin) ---
+                # Safe Selectbox Logic
                 match_options = {}
                 for d in pend:
                     data = d.to_dict()
-                    # Eski kayıt (match) veya yeni kayıt (match_name) kontrolü
                     label = data.get('match_name') or data.get('match') or f"Maç {d.id}"
                     date = data.get('match_date', '')[:10]
                     match_options[d.id] = f"{label} ({date})"
 
                 if pend:
-                    # Selectbox'a sadece ID'leri veriyoruz, format_func ile ismi gösteriyoruz
-                    sel_id = st.selectbox("Sonuçlanacak Maç", list(match_options.keys()), format_func=lambda x: match_options[x])
-                    
+                    c_sel1, c_sel2 = st.columns([2, 1])
+                    with c_sel1:
+                        sel_id = st.selectbox("Sonuçlanacak Maç", list(match_options.keys()), format_func=lambda x: match_options[x])
+                    with c_sel2:
+                        # Manuel ID Arama (Yedek)
+                        manual_id = st.text_input("Veya Maç ID'si ile Ara")
+                        if manual_id: sel_id = manual_id
+
                     c1, c2 = st.columns(2)
                     hs = c1.number_input("Ev Gol", 0); as_ = c2.number_input("Dep Gol", 0)
                     note = st.text_area("Admin Notu (Opsiyonel)")
@@ -509,7 +484,6 @@ def main():
         with tabs[2]:
             st.header("📘 Model Kimlik Kartı (Model Card)")
             st.write("Bu sekme, modelin şeffaflığı ve tekrarlanabilirliği için teknik dokümantasyon üretir.")
-            
             col_mc1, col_mc2 = st.columns([2,1])
             with col_mc1:
                 st.code("""
@@ -518,7 +492,6 @@ def main():
                 Validation Metric: Brier Score
                 Risk Analysis: Volatility Index based on League Profiles
                 """, language="yaml")
-            
             with col_mc2:
                 mc_bytes = create_model_card()
                 st.download_button("📘 Model Card İndir (PDF)", mc_bytes, "model_card_v13.pdf", "application/pdf")
