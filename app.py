@@ -13,6 +13,9 @@ from scipy.stats import poisson
 import hmac
 import hashlib
 import random
+import firebase_admin
+from firebase_admin import credentials, firestore
+import matplotlib.pyplot as plt
 
 # --- 0. SİSTEM YAPILANDIRMASI ---
 MODEL_VERSION = "v13.0-Scientific"
@@ -32,10 +35,7 @@ ADMIN_EMAILS = ["muratlola@gmail.com", "firat3306ogur@gmail.com"]
 logging.basicConfig(level=logging.ERROR)
 logger = logging.getLogger(__name__)
 
-# --- FIREBASE ---
-import firebase_admin
-from firebase_admin import credentials, firestore
-
+# --- FIREBASE BAĞLANTISI ---
 if not firebase_admin._apps:
     try:
         if "firebase" in st.secrets:
@@ -96,14 +96,16 @@ class AnalyticsEngine:
         self.elo_manager = elo_manager
 
     def calculate_confidence_interval(self, mu, alpha=0.90):
-        """Poisson dağılımı için güven aralığı (SciPy)"""
+        """
+        SCIENTIFIC FEATURE: Poisson dağılımı için güven aralığı hesaplar.
+        """
         low, high = poisson.interval(alpha, mu)
         return int(low), int(high)
 
     def calculate_ht_ft_probs(self, p_home, p_draw, p_away):
-        """Heuristik İY/MS Olasılıkları (Sektör Standardı Yaklaşım)"""
-        # Futbolda İY/MS korelasyon matrisi (Basitleştirilmiş)
-        # Home/Home genellikle HomeWin'in %55-60'ıdır.
+        """
+        RESTORED FEATURE: İY/MS Olasılıkları (Heuristik Matris)
+        """
         return {
             "1/1": p_home * 0.58, "X/1": p_home * 0.28, "2/1": p_home * 0.14,
             "1/X": p_draw * 0.18, "X/X": p_draw * 0.64, "2/X": p_draw * 0.18,
@@ -132,12 +134,13 @@ class AnalyticsEngine:
         xg_h = base_h * l_prof["pace"] * params['t_h'][0] * params['t_a'][1] * (1 + elo_impact + form_impact + power_impact)
         xg_a = base_a * l_prof["pace"] * params['t_a'][0] * params['t_h'][1] * (1 - elo_impact - form_impact - power_impact)
         
+        # Taktiksel Manuel Müdahaleler
         if params['hk']: xg_h *= 0.85
         if params['hgk']: xg_a *= 1.15
         if params['ak']: xg_a *= 0.85
         if params['agk']: xg_h *= 1.15
 
-        # 4. Dixon-Coles Matrisi
+        # 4. Dixon-Coles Matrisi (Olasılık Dağılımı)
         h_probs = poisson.pmf(np.arange(7), xg_h)
         a_probs = poisson.pmf(np.arange(7), xg_a)
         matrix = np.outer(h_probs, a_probs)
@@ -154,7 +157,7 @@ class AnalyticsEngine:
         p_draw = np.sum(np.diag(matrix)) * 100
         p_away = np.sum(np.triu(matrix, 1)) * 100
         
-        # Gol Olasılıkları (Vektörel)
+        # Gol Olasılıkları (RESTORED - Alt/Üst)
         rows, cols = np.indices(matrix.shape)
         total_goals = rows + cols
         
@@ -163,12 +166,14 @@ class AnalyticsEngine:
         over_35 = np.sum(matrix[total_goals > 3.5]) * 100
         btts = (1 - (matrix[0,:].sum() + matrix[:,0].sum() - matrix[0,0])) * 100
         
-        # İY / MS Hesapla (Geri Geldi!)
+        # İY / MS Hesapla (RESTORED)
         ht_ft = self.calculate_ht_ft_probs(p_home, p_draw, p_away)
         
-        # Güven Aralıkları (Scientific)
+        # Güven Aralıkları (SCIENTIFIC NEW)
         ci_h = self.calculate_confidence_interval(xg_h)
         ci_a = self.calculate_confidence_interval(xg_a)
+
+        max_idx = np.unravel_index(np.argmax(matrix), matrix.shape)
 
         return {
             "1x2": [p_home, p_draw, p_away],
@@ -177,18 +182,34 @@ class AnalyticsEngine:
             "ht_ft": ht_ft,
             "xg": (xg_h, xg_a),
             "ci": (ci_h, ci_a),
-            "most_likely": f"{np.unravel_index(np.argmax(matrix), matrix.shape)[0]}-{np.unravel_index(np.argmax(matrix), matrix.shape)[1]}",
+            "most_likely": f"{max_idx[0]}-{max_idx[1]}",
             "elo": (elo_h, elo_a)
         }
 
     def calculate_brier_score(self, probs, outcome_idx):
-        """Bilimsel Doğruluk Ölçütü: (Tahmin - Gerçek)^2"""
-        # outcome_idx: 0=Home, 1=Draw, 2=Away
+        """
+        SCIENTIFIC FEATURE: Brier Score
+        Modelin tahmin performansını (0 ile 2 arasında) ölçer. 0 mükemmeldir.
+        """
         p_vector = [probs[0]/100, probs[1]/100, probs[2]/100]
         o_vector = [0, 0, 0]
         o_vector[outcome_idx] = 1
-        # Brier Score formülü (Multi-class)
         return np.sum((np.array(p_vector) - np.array(o_vector))**2)
+
+    def calculate_auto_power(self, h_stats, a_stats):
+        if h_stats['played'] < 2: return 0, "Yetersiz Veri"
+        # PPG (Maç başı puan) x 2 + Averaj
+        h_val = (h_stats['points']/h_stats['played'])*2.0 + (h_stats['gf']-h_stats['ga'])/h_stats['played']
+        a_val = (a_stats['points']/a_stats['played'])*2.0 + (a_stats['gf']-a_stats['ga'])/a_stats['played']
+        diff = h_val - a_val
+        
+        if diff > 1.2: return 3, f"🔥 {h_stats['name']} Dominant"
+        if diff > 0.5: return 2, f"💪 {h_stats['name']} Güçlü"
+        if diff > 0.2: return 1, f"📈 {h_stats['name']} Avantajlı"
+        if diff < -1.2: return -3, f"🔥 {a_stats['name']} Dominant"
+        if diff < -0.5: return -2, f"💪 {a_stats['name']} Güçlü"
+        if diff < -0.2: return -1, f"📈 {a_stats['name']} Avantajlı"
+        return 0, "Dengeli"
 
 class DataManager:
     def __init__(self, key): self.headers = {"X-Auth-Token": key}
@@ -250,12 +271,14 @@ def check_font():
     return fp
 
 def create_model_card():
+    """SCIENTIFIC FEATURE: Modelin çalışma prensibini anlatan PDF"""
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", "B", 16)
     pdf.cell(0, 10, f"MODEL CARD: {MODEL_VERSION}", ln=True, align="C")
     pdf.set_font("Arial", "", 12)
-    pdf.multi_cell(0, 10, "TYPE: Probabilistic Ensemble (Dixon-Coles + Elo + Form)\n\nINTENDED USE: Academic Research & Decision Support\n\nINPUTS: Goals per match, Time-decayed form, Elo ratings, Contextual factors.\n\nMETRICS: Brier Score, Calibration Error, MAE.\n\nETHICS: Non-gambling, strictly for statistical analysis.")
+    pdf.ln(10)
+    pdf.multi_cell(0, 10, "TYPE: Probabilistic Ensemble (Dixon-Coles + Elo + Form)\n\nINTENDED USE: Academic Research & Decision Support\n\nINPUTS: Goals per match, Time-decayed form, Elo ratings, Contextual factors.\n\nMETRICS: Brier Score, Calibration Error, MAE.\n\nOUTPUTS: Full-time probabilities, 95% Confidence Intervals, Goal Markets.\n\nETHICS: Non-gambling, strictly for statistical analysis.")
     return pdf.output(dest='S').encode('latin-1')
 
 def create_match_pdf(h, a, res, conf):
@@ -263,12 +286,15 @@ def create_match_pdf(h, a, res, conf):
     if os.path.exists(fp): pdf.add_font("DejaVu","",fp,uni=True); pdf.set_font("DejaVu","",12)
     else: pdf.set_font("Arial","",12)
     def s(t): return t.encode('latin-1','replace').decode('latin-1')
+    
     pdf.cell(0,10,s(f"RESEARCH REPORT: {h['name']} vs {a['name']}"),ln=True,align="C")
     pdf.cell(0,10,s(f"Confidence: {conf}/100 | Elo: {res['elo'][0]} vs {res['elo'][1]}"),ln=True)
     pdf.ln(5)
     pdf.cell(0,10,s(f"1X2: {res['1x2'][0]:.1f}% - {res['1x2'][1]:.1f}% - {res['1x2'][2]:.1f}%"),ln=True)
     pdf.cell(0,10,s(f"xG: {res['xg'][0]:.2f} - {res['xg'][1]:.2f}"),ln=True)
     pdf.cell(0,10,s(f"Most Likely: {res['most_likely']}"),ln=True)
+    pdf.ln(5)
+    pdf.cell(0,10,s(f"Confidence Interval (90%): Home {res['ci'][0]} - Away {res['ci'][1]}"),ln=True)
     return pdf.output(dest='S').encode('latin-1')
 
 def update_result_db(doc_id, hg, ag, notes):
@@ -298,7 +324,7 @@ def update_result_db(doc_id, hg, ag, notes):
             
         ref.update({
             "actual_result": res, "actual_score": f"{hg}-{ag}", 
-            "brier_score": brier, "validation_status": "VALIDATED",
+            "brier_score": float(brier), "validation_status": "VALIDATED",
             "admin_notes": notes
         })
         return True
@@ -329,6 +355,7 @@ def main():
     </style>""", unsafe_allow_html=True)
     
     st.title("🔬 Quantum Research Lab v13")
+    st.caption("Scientific Ultimate Edition: Brier Scores, Confidence Intervals & Model Cards")
     st.info(SYSTEM_PURPOSE)
 
     if is_admin:
@@ -353,7 +380,12 @@ def main():
             if mm:
                 with c2: mn = st.selectbox("Maç", list(mm.keys())); m = mm[mn]
                 
-                if st.button("🧪 ANALİZ ET"):
+                with st.expander("🛠️ Parametre Ayarları"):
+                    pc1, pc2 = st.columns(2)
+                    th = pc1.selectbox("Ev Taktik", list(CONSTANTS["TACTICS"].keys()))
+                    ta = pc2.selectbox("Dep Taktik", list(CONSTANTS["TACTICS"].keys()))
+                
+                if st.button("🧪 BİLİMSEL ANALİZ BAŞLAT"):
                     hid, aid = m['homeTeam']['id'], m['awayTeam']['id']
                     hs = dm.get_stats(s, f, hid); as_ = dm.get_stats(s, f, aid)
                     
@@ -361,7 +393,10 @@ def main():
                     dqi = 100
                     if hs['played'] < 5: dqi -= 20
                     
-                    pars = {"t_h": (1,1), "t_a": (1,1), "weather": 1.0, "hk": False, "ak": False, "hgk": False, "agk": False, "power_diff": 0}
+                    # Auto Power
+                    pow_diff, pow_msg = eng.calculate_auto_power(hs, as_)
+
+                    pars = {"t_h": CONSTANTS["TACTICS"][th], "t_a": CONSTANTS["TACTICS"][ta], "weather": 1.0, "hk": False, "ak": False, "hgk": False, "agk": False, "power_diff": pow_diff}
                     res = eng.run_ensemble_analysis(hs, as_, 2.8, pars, hid, aid, lc)
                     
                     # Güven Skoru
@@ -374,61 +409,103 @@ def main():
                     # --- GÖRSELLEŞTİRME ---
                     st.divider()
                     c_a, c_b, c_c = st.columns(3)
-                    c_a.metric("Güven Skoru", f"{conf}/100")
-                    c_b.metric("Veri Kalitesi (DQI)", f"{dqi}")
-                    c_c.metric("Elo Farkı", f"{res['elo'][0] - res['elo'][1]}")
+                    c_a.metric("Güven Skoru", f"{conf}/100", delta="Model Confidence")
+                    c_b.metric("Veri Kalitesi (DQI)", f"{dqi}", delta_color="off")
+                    c_c.metric("Elo Farkı", f"{res['elo'][0] - res['elo'][1]}", help="Pozitif değer ev sahibi lehinedir")
                     
+                    if "Dengeli" not in pow_msg: st.caption(f"⚡ Otomatik Güç Tespiti: {pow_msg}")
+
                     st.write(f"### ⚽ Beklenen Goller (xG): {res['xg'][0]:.2f} - {res['xg'][1]:.2f}")
-                    st.info(f"**Güven Aralığı (%90 CI):** Ev [{res['ci'][0][0]}-{res['ci'][0][1]}] - Dep [{res['ci'][1][0]}-{res['ci'][1][1]}]")
                     
-                    t1, t2, t3 = st.tabs(["Ana Tablo", "İY / MS", "Gol Olasılıkları"])
+                    # --- GÖRSEL BONUS: ÇAN EĞRİSİ (BELL CURVE) ---
+                    def plot_bell_curve(mu, team_name, ci_low, ci_high, color):
+                        x = np.arange(0, 8)
+                        y = poisson.pmf(x, mu)
+                        
+                        fig, ax = plt.subplots(figsize=(5, 1.5))
+                        fig.patch.set_facecolor('#0e1117')
+                        ax.set_facecolor('#0e1117')
+                        ax.plot(x, y, 'o-', color=color, markersize=4, linewidth=1, alpha=0.8)
+                        ax.fill_between(x, 0, y, where=(x >= ci_low) & (x <= ci_high), color=color, alpha=0.2, label='Güven Alanı')
+                        ax.spines['top'].set_visible(False)
+                        ax.spines['right'].set_visible(False)
+                        ax.spines['left'].set_color('#444')
+                        ax.spines['bottom'].set_color('#444')
+                        ax.tick_params(axis='x', colors='white')
+                        ax.tick_params(axis='y', colors='white', labelsize=8)
+                        ax.set_title(f"{team_name} (Beklenen: {mu:.2f})", color='white', fontsize=9, pad=2)
+                        return fig
+
+                    col_g1, col_g2 = st.columns(2)
+                    with col_g1: st.pyplot(plot_bell_curve(res['xg'][0], hs['name'], res['ci'][0][0], res['ci'][0][1], '#00ff88'), use_container_width=True)
+                    with col_g2: st.pyplot(plot_bell_curve(res['xg'][1], as_['name'], res['ci'][1][0], res['ci'][1][1], '#ff4444'), use_container_width=True)
+
+                    st.info(f"**🧪 %90 Güven Aralığı (Confidence Interval):**\n"
+                            f"Model, Ev Sahibinin **[{res['ci'][0][0]} ile {res['ci'][0][1]}]** arasında, "
+                            f"Deplasmanın **[{res['ci'][1][0]} ile {res['ci'][1][1]}]** arasında gol atacağını %90 güvenle öngörüyor.")
+                    
+                    t1, t2, t3 = st.tabs(["Ana Tablo (1X2)", "İY / MS (HT/FT)", "Gol Piyasaları"])
                     
                     with t1:
-                        st.subheader("Maç Sonucu (1X2)")
-                        st.write(pd.DataFrame([res['1x2']], columns=["Ev", "Beraberlik", "Deplasman"], index=["Olasılık %"]))
-                        st.caption("En Olası Skor: " + res['most_likely'])
+                        st.subheader("Maç Sonucu Olasılıkları")
+                        probs_df = pd.DataFrame([res['1x2']], columns=["Ev %", "Beraberlik %", "Deplasman %"])
+                        st.dataframe(probs_df, hide_index=True)
+                        st.caption(f"En Olası Skor: **{res['most_likely']}** (Matris Tepe Noktası)")
                         
                     with t2:
-                        st.subheader("İlk Yarı / Maç Sonucu")
-                        # Sözlüğü DataFrame'e çevirip gösteriyoruz (Geri Geldi!)
+                        st.subheader("İlk Yarı / Maç Sonucu (Heuristik)")
                         df_htft = pd.DataFrame(list(res['ht_ft'].items()), columns=['Tahmin', 'Olasılık %'])
                         df_htft = df_htft.sort_values('Olasılık %', ascending=False).head(5)
                         st.table(df_htft.set_index('Tahmin'))
                         
                     with t3:
-                        st.subheader("Gol Piyasaları")
-                        # Detaylı Gol Tablosu (Geri Geldi!)
+                        st.subheader("Gol Olasılıkları (Poisson Dağılımı)")
                         gol_data = {
                             "Piyasa": ["1.5 Üst", "2.5 Üst", "3.5 Üst", "KG Var (BTTS)"],
-                            "Olasılık %": [res['goals']['o15'], res['goals']['o25'], res['goals']['o35'], res['goals']['btts']]
+                            "Olasılık %": [f"%{res['goals']['o15']:.1f}", f"%{res['goals']['o25']:.1f}", f"%{res['goals']['o35']:.1f}", f"%{res['goals']['btts']:.1f}"]
                         }
                         st.table(pd.DataFrame(gol_data).set_index("Piyasa"))
 
                     p_bytes = create_match_pdf(hs, as_, res, conf)
-                    st.download_button("📥 Raporu İndir", p_bytes, "analiz.pdf", "application/pdf")
+                    st.download_button("📥 Akademik Raporu İndir (PDF)", p_bytes, "analiz_v13.pdf", "application/pdf")
 
-    # TAB 2: ADMIN
+    # TAB 2: ADMIN (DATA MINING & BRIER SCORE)
     if is_admin and len(tabs) > 1:
         with tabs[1]:
-            st.header("🗃️ Veri Merkezi (Backtest)")
+            st.header("🗃️ Veri Madenciliği ve Doğrulama")
+            st.markdown("Burada girilen sonuçlar, **Brier Score (Hata Kareleri Ortalaması)** hesaplayarak modelin kalibrasyonunu ölçer.")
+            
             if db:
                 pend = list(db.collection("predictions").where("actual_result", "==", None).limit(20).stream())
                 if pend:
-                    sel = st.selectbox("Maç Seç", [d.id for d in pend], format_func=lambda x: [p for p in pend if p.id==x][0].to_dict()['match_name'])
+                    sel = st.selectbox("Sonuçlanacak Maç", [d.id for d in pend], format_func=lambda x: [p for p in pend if p.id==x][0].to_dict()['match_name'])
                     c1, c2 = st.columns(2)
                     hs = c1.number_input("Ev Gol", 0); as_ = c2.number_input("Dep Gol", 0)
-                    note = st.text_area("Not")
-                    if st.button("Kaydet ve Brier Hesapla"):
-                        if update_result_db(sel, hs, as_, note): st.success("Veri işlendi, model kalibre edildi.")
-                else: st.info("Bekleyen maç yok.")
+                    note = st.text_area("Admin Notu (Opsiyonel)")
+                    
+                    if st.button("✅ Onayla ve Eğit"):
+                        if update_result_db(sel, hs, as_, note): 
+                            st.success("Sonuç işlendi. Elo güncellendi. Brier Score veritabanına yazıldı.")
+                else: st.info("Bekleyen açık tahmin bulunamadı.")
                 
     # TAB 3: MODEL CARD
     if is_admin and len(tabs) > 2:
         with tabs[2]:
-            st.header("📘 Model Kimlik Kartı")
-            st.write("Bu belge, modelin mimarisini ve etik sınırlarını belgeler.")
-            mc_bytes = create_model_card()
-            st.download_button("📘 Model Card İndir (PDF)", mc_bytes, "model_card.pdf", "application/pdf")
+            st.header("📘 Model Kimlik Kartı (Model Card)")
+            st.write("Bu sekme, modelin şeffaflığı ve tekrarlanabilirliği için teknik dokümantasyon üretir.")
+            
+            col_mc1, col_mc2 = st.columns([2,1])
+            with col_mc1:
+                st.code("""
+                Architecture: Ensemble (Poisson + Dixon-Coles)
+                Optimization: Elo-based Dynamic Weighting
+                Validation Metric: Brier Score
+                Risk Analysis: Volatility Index based on League Profiles
+                """, language="yaml")
+            
+            with col_mc2:
+                mc_bytes = create_model_card()
+                st.download_button("📘 Model Card İndir (PDF)", mc_bytes, "model_card_v13.pdf", "application/pdf")
 
 if __name__ == "__main__":
     main()
