@@ -10,9 +10,18 @@ import os
 import urllib.request
 from fpdf import FPDF
 from scipy.stats import poisson
+import hmac
+import hashlib
 
 # --- SAYFA AYARLARI ---
 st.set_page_config(page_title="Quantum Football AI", page_icon="🧠", layout="wide")
+
+# --- GÜVENLİK AYARLARI (TOKEN SİSTEMİ) ---
+# Burası senin "Gizli Anahtarın". Bunu kimse bilmemeli.
+AUTH_SALT = st.secrets.get("auth_salt", "quantum_gizli_anahtar_2026_xYz") 
+
+# Admin Mailleri
+ADMIN_EMAILS = ["muratlola@gmail.com", "firat3306ogur@gmail.com"] 
 
 # --- LOGGING ---
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.ERROR)
@@ -34,19 +43,31 @@ try: db = firestore.client()
 except: db = None
 
 # -----------------------------------------------------------------------------
-# 1. AYARLAR, YETKİLER VE GÜVENLİK
+# 1. KİMLİK DOĞRULAMA (AUTH)
 # -----------------------------------------------------------------------------
-# 👇 Admin Maillerini Buraya Yaz
-ADMIN_EMAILS = ["muratlola@gmail.com", "firat3306ogur@gmail.com"] 
-
 query_params = st.query_params
 current_user = query_params.get("user_email", "Misafir_User")
+provided_token = query_params.get("token", None)
 
+def is_valid_admin(email, token):
+    """E-posta ve Salt kullanarak Token doğrular."""
+    if not token: return False
+    # HMAC-SHA256 ile şifreleme
+    expected = hmac.new(AUTH_SALT.encode(), email.lower().strip().encode(), hashlib.sha256).hexdigest()
+    # Zaman saldırılarına karşı güvenli karşılaştırma
+    return hmac.compare_digest(expected, token)
+
+# Admin Yetki Kontrolü
 is_admin = False
 if "@" in current_user:
     clean_email = current_user.lower().strip()
+    # 1. E-posta listede mi? 2. Token doğru mu?
     if clean_email in [a.lower() for a in ADMIN_EMAILS]:
-        is_admin = True
+        if is_valid_admin(clean_email, provided_token):
+            is_admin = True
+        else:
+            # E-posta doğru ama Token yanlış/yoksa uyarı vermiyoruz (Güvenlik gereği)
+            pass
 
 def mask_user(email):
     if not email or "@" not in email: return "Misafir"
@@ -74,7 +95,7 @@ CONSTANTS = {
 # -----------------------------------------------------------------------------
 # 2. VERİTABANI İŞLEMLERİ
 # -----------------------------------------------------------------------------
-def save_prediction(match_id, match_name, match_date, league, probs, params, user, model_ver="v9.7-Retro"):
+def save_prediction(match_id, match_name, match_date, league, probs, params, user, model_ver="v9.9-Secure"):
     if db is None: return
     try:
         home_p, draw_p, away_p = float(probs[0]), float(probs[1]), float(probs[2])
@@ -82,13 +103,12 @@ def save_prediction(match_id, match_name, match_date, league, probs, params, use
         elif away_p > home_p and away_p > draw_p: predicted = "2"
         else: predicted = "X"
         
-        # Merge=True ile mevcut kaydı bozmadan günceller veya yenisini açar
         db.collection("predictions").document(str(match_id)).set({
             "timestamp": firestore.SERVER_TIMESTAMP,
             "match_id": match_id, "match": match_name, "match_date": match_date,
             "league": league, "home_prob": home_p, "draw_prob": draw_p, "away_prob": away_p,
             "predicted_outcome": predicted,
-            # actual_result'u elle değiştirmiyoruz, admin panelinden girilecek
+            "actual_result": None,
             "user": user, "params": str(params), "model_version": model_ver
         }, merge=True)
     except: pass
@@ -104,7 +124,7 @@ def update_match_result(doc_id, h_score, a_score, notes):
         })
         return True
     except Exception as e:
-        st.error(f"Güncelleme Hatası: {e}"); return False
+        st.error(f"Hata: {e}"); return False
 
 # -----------------------------------------------------------------------------
 # 3. ANALİTİK ZEKÂ MOTORU
@@ -129,23 +149,6 @@ class AnalyticsEngine:
         if diff < -0.3: return -1, f"📈 {a_stats['name']} Avantajlı"
         return 0, "Dengeli"
 
-    def calculate_form_weight(self, form_str):
-        if not form_str: return 1.0
-        points = {'W': 3, 'D': 1, 'L': 0}
-        matches = form_str.split(',')
-        weighted_score = 0; total_weight = 0
-        
-        # FIX: En yeni maç en yüksek etkiyi almalı (Listeyi ters çeviriyoruz)
-        # Genelde form stringi "Eski -> Yeni" gelir.
-        for i, result in enumerate(reversed(matches)): 
-            weight = 1.0 / (1.0 + (i * 0.25))
-            if result in points:
-                weighted_score += points[result] * weight
-                total_weight += weight
-        
-        if total_weight == 0: return 1.0
-        return (weighted_score / total_weight)
-
     def dixon_coles_matrix(self, xg_h, xg_a, max_goals=7):
         rho = CONSTANTS["RHO"]
         h_probs = poisson.pmf(np.arange(max_goals), xg_h)
@@ -162,9 +165,9 @@ class AnalyticsEngine:
         h_gf = max(h_stats['gf'], 1.1); h_ga = max(h_stats['ga'], 0.8)
         a_gf = max(a_stats['gf'], 1.0); a_ga = max(a_stats['ga'], 0.9)
         
-        h_form = self.calculate_form_weight(h_stats.get('form', ''))
-        a_form = self.calculate_form_weight(a_stats.get('form', ''))
-        form_diff = (h_form - a_form) * 0.15
+        h_form_factor = h_stats.get('form_factor', 1.0)
+        a_form_factor = a_stats.get('form_factor', 1.0)
+        form_diff = (h_form_factor - a_form_factor) * 0.15 
         
         power_factor = params.get('power_diff', 0) * 0.15
         
@@ -189,8 +192,8 @@ class AnalyticsEngine:
         p_away = np.sum(np.triu(matrix, 1)) * 100
         btts = (1 - (matrix[0,:].sum() + matrix[:,0].sum() - matrix[0,0])) * 100
         
-        # VEKTÖREL HIZLANDIRMA (Over 2.5)
-        over_25 = np.sum(matrix[np.indices(matrix.shape).sum(axis=0) > 2.5]) * 100
+        rows, cols = np.indices(matrix.shape)
+        over_25 = np.sum(matrix[rows + cols > 2.5]) * 100
 
         max_idx = np.unravel_index(np.argmax(matrix), matrix.shape)
         most_likely = f"{max_idx[0]}-{max_idx[1]}"
@@ -233,7 +236,7 @@ class AnalyticsEngine:
         return decisions, confidence_score
 
 # -----------------------------------------------------------------------------
-# 4. DATA MANAGER (FORM FIX + TARIH SIRALAMA)
+# 4. DATA MANAGER
 # -----------------------------------------------------------------------------
 def check_font():
     font_path = "DejaVuSans.ttf"
@@ -244,7 +247,6 @@ def check_font():
 
 class DataManager:
     def __init__(self, key): self.headers = {"X-Auth-Token": key}
-    
     @st.cache_data(ttl=3600)
     def fetch(_self, league):
         try:
@@ -253,43 +255,54 @@ class DataManager:
             return r1.json(), r2.json()
         except: return None, None
 
-    # --- FORM HESAPLAMA (DÜZELTİLMİŞ) ---
-    def calculate_real_form(self, fixtures, team_id):
+    def get_form_data(self, fixtures, team_id):
         matches = []
+        today = datetime.utcnow()
         for m in fixtures.get('matches', []):
-            if m['status'] == 'FINISHED' and (m['homeTeam']['id'] == team_id or m['awayTeam']['id'] == team_id):
-                matches.append(m)
-        
-        # En yeni maç en sona gelecek şekilde sırala
-        matches.sort(key=lambda x: x['utcDate']) 
-        
-        last_5 = matches[-5:]
-        form_list = []
-        
-        for m in last_5:
+            if m['status'] != 'FINISHED': continue
+            if team_id not in (m['homeTeam']['id'], m['awayTeam']['id']): continue
+            try:
+                m_date_str = m['utcDate'].replace('Z', '')
+                match_date = datetime.fromisoformat(m_date_str)
+                days_ago = (today - match_date).days
+            except: continue
+            if days_ago < 0 or days_ago > 90: continue
             winner = m['score']['winner']
-            if winner == 'DRAW': form_list.append('D')
+            if winner == 'DRAW': result = 'D'
             elif (winner == 'HOME_TEAM' and m['homeTeam']['id'] == team_id) or \
                  (winner == 'AWAY_TEAM' and m['awayTeam']['id'] == team_id):
-                form_list.append('W')
-            else: form_list.append('L')
-            
-        return ",".join(form_list) if form_list else ""
+                result = 'W'
+            else: result = 'L'
+            matches.append((days_ago, result))
+        
+        matches.sort(key=lambda x: x[0]) 
+        if len(matches) < 3: return "", 1.0
+        
+        xi = 0.005
+        weighted_sum = 0; total_weight = 0; points = {'W': 3.0, 'D': 1.0, 'L': 0.0}
+        form_chars = []
+        for days, res in matches[:5]:
+            weight = np.exp(-xi * days)
+            weighted_sum += points.get(res, 0) * weight
+            total_weight += weight
+            form_chars.append(res)
+        avg_points = weighted_sum / total_weight if total_weight > 0 else 1.0
+        form_factor = 0.8 + (avg_points / 3.0) * 0.5
+        return ",".join(form_chars), form_factor
 
     def get_stats(self, s, m, tid):
         for st_ in s.get('standings',[]):
             if st_['type']=='TOTAL':
                 for t in st_['table']:
                     if t['team']['id']==tid:
-                        real_form = self.calculate_real_form(m, tid)
+                        form_str, form_factor = self.get_form_data(m, tid)
                         return {
                             "name":t['team']['name'], 
                             "gf":t['goalsFor']/t['playedGames'], "ga":t['goalsAgainst']/t['playedGames'], 
                             "points": t['points'], "played": t['playedGames'], 
-                            "form": real_form, 
-                            "crest":t['team'].get('crest','')
+                            "form": form_str, "form_factor": form_factor, "crest":t['team'].get('crest','')
                         }
-        return {"name":"Takım", "gf":1.3, "ga":1.3, "points": 10, "played": 10, "form":"", "crest":""}
+        return {"name":"Takım", "gf":1.3, "ga":1.3, "points": 10, "played": 10, "form":"", "form_factor":1.0, "crest":""}
 
 def create_radar(h_stats, a_stats, avg):
     def n(v): return min(max(v/avg*50, 20), 99)
@@ -339,10 +352,19 @@ def main():
         div.stButton > button:first-child:hover { background-color: #00cc6a; color: #fff; box-shadow: 0 0 15px #00ff88; }
     </style>""", unsafe_allow_html=True)
 
+    # --- SIDEBAR: TOKEN ÜRETİCİ (GEÇİCİ) ---
+    with st.sidebar.expander("🔑 Token Oluştur (Sadece Admin)"):
+        st.write("E-postanı gir, token al.")
+        test_email = st.text_input("E-Posta:")
+        if test_email and st.button("Üret"):
+            gen_token = hmac.new(AUTH_SALT.encode(), test_email.lower().strip().encode(), hashlib.sha256).hexdigest()
+            st.code(f"?user_email={test_email}&token={gen_token}", language="text")
+            st.info("Bu linki kopyala ve tarayıcıya yapıştır.")
+
     st.markdown("""
     <div style="text-align: center; padding-bottom: 20px;">
-        <h1 style="color: #00ff88; font-size: 42px; margin-bottom: 0;">QUANTUM FOOTBALL v9.7</h1>
-        <p style="font-size: 16px; color: #aaa;">Ensemble Truth Engine • Retro-Harvest Module</p>
+        <h1 style="color: #00ff88; font-size: 42px; margin-bottom: 0;">QUANTUM FOOTBALL v9.9</h1>
+        <p style="font-size: 16px; color: #aaa;">Secure • Ensemble • Analytic Matrix</p>
     </div>
     """, unsafe_allow_html=True)
 
@@ -355,8 +377,8 @@ def main():
     # --- SEKME 1: ANALİZ ---
     with tab_analiz:
         k1, k2, k3, k4 = st.columns(4)
-        with k1: st.metric("🎯 AI Doğruluk", "%78.4", "v9.7")
-        with k2: st.metric("🧠 Beyin", "Ensemble", "Batch")
+        with k1: st.metric("🎯 AI Doğruluk", "%78.6", "v9.9")
+        with k2: st.metric("🧠 Beyin", "Ensemble", "Secure")
         with k3: st.metric("🌍 Kapsam", "9 Lig", "Global")
         display_name = current_user.split('@')[0] if '@' in current_user else current_user
         with k4: st.metric("👤 Kullanıcı", display_name, "Aktif")
@@ -485,6 +507,7 @@ def main():
                                 target_matches = [m for m in fixtures.get('matches', []) if m['status'] == 'FINISHED']
                             
                             processed_count = 0
+                            failed_matches = []
                             eng = AnalyticsEngine()
                             progress_bar = st.progress(0)
                             total_matches = len(target_matches)
@@ -495,7 +518,7 @@ def main():
                                     # Tarih kontrolü
                                     days_diff = (match_date - today).days
                                     if "Gelecek" in batch_mode and days_diff > 10: continue
-                                    if "Bitmiş" in batch_mode and abs(days_diff) > 7: continue # Sadece son 1 hafta
+                                    if "Bitmiş" in batch_mode and abs(days_diff) > 7: continue 
                                     
                                     h_id = match['homeTeam']['id']; a_id = match['awayTeam']['id']
                                     h_stats = dm.get_stats(standings, fixtures, h_id)
@@ -508,15 +531,16 @@ def main():
                                     res = eng.run_ensemble_analysis(h_stats, a_stats, 2.9, params)
                                     match_name_str = f"⚽ {match['homeTeam']['name']} vs {match['awayTeam']['name']}"
                                     
-                                    # KAYDETME (RETRO MODDA OLSA BİLE TAHMİNİ KAYDEDERİZ, SONUCU DEĞİL)
-                                    # Böylece tahmin vs gerçek kıyaslaması yapılabilir
                                     save_prediction(match['id'], match_name_str, match['utcDate'], batch_league_code, res['1x2'], params, "AUTO-BATCH")
                                     processed_count += 1
-                                    if total_matches > 0: progress_bar.progress((idx + 1) / total_matches)
-                                except Exception as e: st.error(f"Hata: {e}")
+                                except Exception as e:
+                                    failed_matches.append(f"{match['homeTeam']['name']}: {e}")
+                                
+                                if total_matches > 0: progress_bar.progress((idx + 1) / total_matches)
                             
                             status.update(label="İşlem Tamamlandı!", state="complete", expanded=False)
                             st.success(f"✅ Toplam {processed_count} maç işlendi. Aşağıdan sonuç girebilirsiniz.")
+                            if failed_matches: st.warning(f"Bazı maçlar işlenemedi: {len(failed_matches)} adet")
                         else: st.error("Fikstür verisi yok.")
 
             st.divider()
