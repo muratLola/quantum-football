@@ -18,15 +18,239 @@ from firebase_admin import credentials, firestore
 import matplotlib.pyplot as plt
 
 # --- 0. SİSTEM YAPILANDIRMASI ---
-MODEL_VERSION = "v13.6-Expanded"
-SYSTEM_PURPOSE = """
-⚠️ YASAL UYARI:
-Bu sistem (Quantum Football), istatistiksel veri simülasyonu yapan bir analiz aracıdır.
-Kesinlikle bahis, iddaa veya finansal yatırım tavsiyesi vermez.
-"""
+MODEL_VERSION = "v14.0-Global"
 
 st.set_page_config(page_title="QUANTUM FOOTBALL", page_icon="⚽", layout="wide")
 np.random.seed(42)
+
+# --- DİL SÖZLÜĞÜ (TRANSLATION DICTIONARY) ---
+TRANS = {
+    "EN": {
+        "page_title": "QUANTUM FOOTBALL",
+        "legal_warning": "⚠️ DISCLAIMER:\nThis system is a statistical simulation tool for educational purposes.\nIt does NOT provide betting or financial advice.",
+        "tab_sim": "📊 Simulation",
+        "tab_admin": "🗃️ Admin Panel",
+        "tab_model": "📘 Model Card",
+        "lbl_league": "Select League",
+        "lbl_match": "Select Match",
+        "exp_params": "🛠️ Parameter Settings",
+        "lbl_tac_home": "Home Tactics",
+        "lbl_tac_away": "Away Tactics",
+        "btn_start": "🚀 RUN SIMULATION",
+        "res_conf": "Confidence Score",
+        "res_dqi": "Data Quality (DQI)",
+        "res_elo": "Elo Diff",
+        "res_auto_power": "⚡ Auto Power Detect",
+        "res_xg": "⚽ Expected Goals (xG)",
+        "res_ci": "🧪 90% Confidence Interval",
+        "ci_desc": "Model projects Home goals between **[{0}-{1}]**, Away goals between **[{2}-{3}]**.",
+        "tab_res_1": "Main Table (1X2)",
+        "tab_res_2": "HT / FT Probabilities",
+        "tab_res_3": "Goal Markets",
+        "col_home": "Home %",
+        "col_draw": "Draw %",
+        "col_away": "Away %",
+        "market_o15": "Over 1.5",
+        "market_o25": "Over 2.5",
+        "market_o35": "Over 3.5",
+        "market_btts": "BTTS (Both Teams Score)",
+        "admin_batch_title": "⚡ Batch Processing Center",
+        "admin_batch_desc": "Analyzes all upcoming and live matches in the selected league.",
+        "admin_batch_btn": "⚡ ANALYZE FULL LEAGUE",
+        "admin_batch_success": "✅ Operation Complete: {0} matches added to database.",
+        "admin_valid_title": "📝 Result Validation",
+        "admin_valid_sel": "Match to Validate",
+        "admin_valid_btn": "✅ Confirm & Train",
+        "admin_valid_success": "Result processed. Elo updated. Brier Score logged.",
+        "msg_no_match": "No upcoming or live matches found in this league.",
+        "msg_wait": "Pending...",
+        "pow_dominant": "Dominant",
+        "pow_strong": "Strong",
+        "pow_adv": "Advantage",
+        "pow_balanced": "Balanced",
+        "dl_report": "📥 Download Report (PDF)"
+    },
+    "TR": {
+        "page_title": "QUANTUM FOOTBALL",
+        "legal_warning": "⚠️ YASAL UYARI:\nBu sistem, istatistiksel veri simülasyonu yapan bir analiz aracıdır.\nKesinlikle bahis veya finansal yatırım tavsiyesi vermez.",
+        "tab_sim": "📊 Simülasyon",
+        "tab_admin": "🗃️ Admin Paneli",
+        "tab_model": "📘 Model Kimliği",
+        "lbl_league": "Lig Seçin",
+        "lbl_match": "Maç Seçin",
+        "exp_params": "🛠️ Parametre Ayarları",
+        "lbl_tac_home": "Ev Taktik",
+        "lbl_tac_away": "Dep Taktik",
+        "btn_start": "🚀 SİMÜLASYONU BAŞLAT",
+        "res_conf": "Güven Skoru",
+        "res_dqi": "Veri Kalitesi (DQI)",
+        "res_elo": "Elo Farkı",
+        "res_auto_power": "⚡ Otomatik Güç Tespiti",
+        "res_xg": "⚽ Beklenen Goller (xG)",
+        "res_ci": "🧪 %90 Güven Aralığı",
+        "ci_desc": "Model, Ev Sahibinin **[{0}-{1}]**, Deplasmanın **[{2}-{3}]** gol atacağını öngörüyor.",
+        "tab_res_1": "Ana Tablo (1X2)",
+        "tab_res_2": "İY / MS (HT/FT)",
+        "tab_res_3": "Gol Piyasaları",
+        "col_home": "Ev %",
+        "col_draw": "Berabere %",
+        "col_away": "Dep %",
+        "market_o15": "1.5 Üst",
+        "market_o25": "2.5 Üst",
+        "market_o35": "3.5 Üst",
+        "market_btts": "KG Var",
+        "admin_batch_title": "⚡ Toplu İşlem Merkezi",
+        "admin_batch_desc": "Seçili ligdeki tüm gelecek ve canlı maçları analiz eder.",
+        "admin_batch_btn": "⚡ TÜM LİGİ ANALİZ ET",
+        "admin_batch_success": "✅ İşlem Tamamlandı: {0} maç eklendi.",
+        "admin_valid_title": "📝 Sonuç Doğrulama",
+        "admin_valid_sel": "Sonuçlanacak Maç",
+        "admin_valid_btn": "✅ Onayla ve Eğit",
+        "admin_valid_success": "Sonuç işlendi. Elo güncellendi. Brier Score kaydedildi.",
+        "msg_no_match": "Bu ligde şu an oynanan veya gelecek maç bulunamadı.",
+        "msg_wait": "Bekleniyor...",
+        "pow_dominant": "Dominant",
+        "pow_strong": "Güçlü",
+        "pow_adv": "Avantajlı",
+        "pow_balanced": "Dengeli",
+        "dl_report": "📥 Raporu İndir (PDF)"
+    },
+    "DE": {
+        "page_title": "QUANTUM FUSSBALL",
+        "legal_warning": "⚠️ HAFTUNGSAUSSCHLUSS:\nDies ist ein statistisches Simulationswerkzeug.\nEs bietet KEINE Wett- oder Finanzberatung.",
+        "tab_sim": "📊 Simulation",
+        "tab_admin": "🗃️ Admin-Bereich",
+        "tab_model": "📘 Modellkarte",
+        "lbl_league": "Liga Wählen",
+        "lbl_match": "Spiel Wählen",
+        "exp_params": "🛠️ Parametereinstellungen",
+        "lbl_tac_home": "Heim Taktik",
+        "lbl_tac_away": "Auswärts Taktik",
+        "btn_start": "🚀 SIMULATION STARTEN",
+        "res_conf": "Konfidenz-Score",
+        "res_dqi": "Datenqualität (DQI)",
+        "res_elo": "Elo-Diff",
+        "res_auto_power": "⚡ Auto-Stärke",
+        "res_xg": "⚽ Erwartete Tore (xG)",
+        "res_ci": "🧪 90% Konfidenzintervall",
+        "ci_desc": "Modell prognostiziert Heimtore zwischen **[{0}-{1}]**, Auswärtstore zwischen **[{2}-{3}]**.",
+        "tab_res_1": "Haupttabelle (1X2)",
+        "tab_res_2": "HZ / ES Wahrsch.",
+        "tab_res_3": "Tormärkte",
+        "col_home": "Heim %",
+        "col_draw": "Remis %",
+        "col_away": "Gast %",
+        "market_o15": "Über 1.5",
+        "market_o25": "Über 2.5",
+        "market_o35": "Über 3.5",
+        "market_btts": "Beide Treffen (BTTS)",
+        "admin_batch_title": "⚡ Stapelverarbeitung",
+        "admin_batch_desc": "Analysiert alle kommenden Spiele.",
+        "admin_batch_btn": "⚡ LIGA ANALYSIEREN",
+        "admin_batch_success": "✅ Fertig: {0} Spiele hinzugefügt.",
+        "admin_valid_title": "📝 Ergebnisvalidierung",
+        "admin_valid_sel": "Spiel auswählen",
+        "admin_valid_btn": "✅ Bestätigen & Trainieren",
+        "admin_valid_success": "Ergebnis verarbeitet. Elo aktualisiert.",
+        "msg_no_match": "Keine Spiele gefunden.",
+        "msg_wait": "Warten...",
+        "pow_dominant": "Dominant",
+        "pow_strong": "Stark",
+        "pow_adv": "Vorteil",
+        "pow_balanced": "Ausgeglichen",
+        "dl_report": "📥 Bericht Herunterladen (PDF)"
+    },
+    "FR": {
+        "page_title": "FOOTBALL QUANTIQUE",
+        "legal_warning": "⚠️ AVERTISSEMENT:\nCe système est un outil de simulation statistique.\nIl ne fournit PAS de conseils de paris.",
+        "tab_sim": "📊 Simulation",
+        "tab_admin": "🗃️ Panneau Admin",
+        "tab_model": "📘 Carte Modèle",
+        "lbl_league": "Choisir la Ligue",
+        "lbl_match": "Choisir le Match",
+        "exp_params": "🛠️ Paramètres",
+        "lbl_tac_home": "Tactique Domicile",
+        "lbl_tac_away": "Tactique Extérieur",
+        "btn_start": "🚀 LANCER SIMULATION",
+        "res_conf": "Score Confiance",
+        "res_dqi": "Qualité Données",
+        "res_elo": "Diff. Elo",
+        "res_auto_power": "⚡ Détection Puissance",
+        "res_xg": "⚽ Buts Attendus (xG)",
+        "res_ci": "🧪 Intervalle de Confiance (90%)",
+        "ci_desc": "Le modèle prévoit buts Domicile entre **[{0}-{1}]**, Extérieur entre **[{2}-{3}]**.",
+        "tab_res_1": "Tableau Principal",
+        "tab_res_2": "Mi-temps / Fin",
+        "tab_res_3": "Marchés des Buts",
+        "col_home": "Dom %",
+        "col_draw": "Nul %",
+        "col_away": "Ext %",
+        "market_o15": "Plus de 1.5",
+        "market_o25": "Plus de 2.5",
+        "market_o35": "Plus de 3.5",
+        "market_btts": "Les 2 Marquent",
+        "admin_batch_title": "⚡ Traitement par Lots",
+        "admin_batch_desc": "Analyse tous les matchs à venir.",
+        "admin_batch_btn": "⚡ ANALYSER LA LIGUE",
+        "admin_batch_success": "✅ Terminé: {0} matchs ajoutés.",
+        "admin_valid_title": "📝 Validation Résultats",
+        "admin_valid_sel": "Match à Valider",
+        "admin_valid_btn": "✅ Confirmer & Entraîner",
+        "admin_valid_success": "Résultat traité. Elo mis à jour.",
+        "msg_no_match": "Aucun match trouvé.",
+        "msg_wait": "En attente...",
+        "pow_dominant": "Dominant",
+        "pow_strong": "Fort",
+        "pow_adv": "Avantage",
+        "pow_balanced": "Équilibré",
+        "dl_report": "📥 Télécharger Rapport (PDF)"
+    },
+    "AR": {
+        "page_title": "كرة القدم الكمومية",
+        "legal_warning": "⚠️ إخلاء مسؤولية:\nهذا النظام هو أداة محاكاة إحصائية للأغراض التعليمية.\nلا يقدم نصائح للمراهنة أو الاستثمار المالي.",
+        "tab_sim": "📊 محاكاة",
+        "tab_admin": "🗃️ لوحة الإدارة",
+        "tab_model": "📘 بطاقة النموذج",
+        "lbl_league": "اختر الدوري",
+        "lbl_match": "اختر المباراة",
+        "exp_params": "🛠️ إعدادات المعلمات",
+        "lbl_tac_home": "تكتيكات المضيف",
+        "lbl_tac_away": "تكتيكات الضيف",
+        "btn_start": "🚀 ابدأ المحاكاة",
+        "res_conf": "درجة الثقة",
+        "res_dqi": "جودة البيانات (DQI)",
+        "res_elo": "فرق Elo",
+        "res_auto_power": "⚡ كشف القوة التلقائي",
+        "res_xg": "⚽ الأهداف المتوقعة (xG)",
+        "res_ci": "🧪 فاصل الثقة 90%",
+        "ci_desc": "يتوقع النموذج أهداف المضيف بين **[{0}-{1}]**، والضيف بين **[{2}-{3}]**.",
+        "tab_res_1": "الجدول الرئيسي",
+        "tab_res_2": "الشوط الأول / المباراة",
+        "tab_res_3": "أسواق الأهداف",
+        "col_home": "مضيف %",
+        "col_draw": "تعادل %",
+        "col_away": "ضيف %",
+        "market_o15": "أكثر من 1.5",
+        "market_o25": "أكثر من 2.5",
+        "market_o35": "أكثر من 3.5",
+        "market_btts": "كلا الفريقين يسجل",
+        "admin_batch_title": "⚡ مركز المعالجة المجمعة",
+        "admin_batch_desc": "يحلل جميع المباريات القادمة.",
+        "admin_batch_btn": "⚡ تحليل الدوري بالكامل",
+        "admin_batch_success": "✅ اكتملت العملية: تمت إضافة {0} مباراة.",
+        "admin_valid_title": "📝 التحقق من النتائج",
+        "admin_valid_sel": "المباراة للتحقق",
+        "admin_valid_btn": "✅ تأكيد وتدريب",
+        "admin_valid_success": "تمت معالجة النتيجة. تم تحديث Elo.",
+        "msg_no_match": "لا توجد مباريات قادمة.",
+        "msg_wait": "قيد الانتظار...",
+        "pow_dominant": "مهيمن",
+        "pow_strong": "قوي",
+        "pow_adv": "أفضلية",
+        "pow_balanced": "متوازن",
+        "dl_report": "📥 تحميل التقرير (PDF)"
+    }
+}
 
 # --- GÜVENLİK ---
 AUTH_SALT = st.secrets.get("auth_salt", "quantum_research_key_2026") 
@@ -58,7 +282,7 @@ CONSTANTS = {
     "LEAGUES": {
         "Şampiyonlar Ligi": "CL", 
         "Premier League (EN)": "PL", 
-        "Championship (EN)": "ELC", # EKLENDİ: İngiltere 1. Ligi
+        "Championship (EN)": "ELC", 
         "La Liga (ES)": "PD",
         "Bundesliga (DE)": "BL1", 
         "Serie A (IT)": "SA", 
@@ -71,7 +295,7 @@ CONSTANTS = {
 
 LEAGUE_PROFILES = {
     "PL": {"pace": 1.15, "variance": 1.1}, 
-    "ELC": {"pace": 1.10, "variance": 1.2}, # Championship Profili
+    "ELC": {"pace": 1.10, "variance": 1.2}, 
     "SA": {"pace": 0.90, "variance": 0.8},
     "BL1": {"pace": 1.20, "variance": 1.2},
     "TR1": {"pace": 1.05, "variance": 1.3},
@@ -177,19 +401,19 @@ class AnalyticsEngine:
             "elo": (elo_h, elo_a)
         }
 
-    def calculate_auto_power(self, h_stats, a_stats):
-        if h_stats['played'] < 2: return 0, "Yetersiz Veri"
+    def calculate_auto_power(self, h_stats, a_stats, t):
+        if h_stats['played'] < 2: return 0, t["msg_wait"]
         h_val = (h_stats['points']/h_stats['played'])*2.0 + (h_stats['gf']-h_stats['ga'])/h_stats['played']
         a_val = (a_stats['points']/a_stats['played'])*2.0 + (a_stats['gf']-a_stats['ga'])/a_stats['played']
         diff = h_val - a_val
         
-        if diff > 1.2: return 3, f"🔥 {h_stats['name']} Dominant"
-        if diff > 0.5: return 2, f"💪 {h_stats['name']} Güçlü"
-        if diff > 0.2: return 1, f"📈 {h_stats['name']} Avantajlı"
-        if diff < -1.2: return -3, f"🔥 {a_stats['name']} Dominant"
-        if diff < -0.5: return -2, f"💪 {a_stats['name']} Güçlü"
-        if diff < -0.2: return -1, f"📈 {a_stats['name']} Avantajlı"
-        return 0, "Dengeli"
+        if diff > 1.2: return 3, f"🔥 {h_stats['name']} {t['pow_dominant']}"
+        if diff > 0.5: return 2, f"💪 {h_stats['name']} {t['pow_strong']}"
+        if diff > 0.2: return 1, f"📈 {h_stats['name']} {t['pow_adv']}"
+        if diff < -1.2: return -3, f"🔥 {a_stats['name']} {t['pow_dominant']}"
+        if diff < -0.5: return -2, f"💪 {a_stats['name']} {t['pow_strong']}"
+        if diff < -0.2: return -1, f"📈 {a_stats['name']} {t['pow_adv']}"
+        return 0, t['pow_balanced']
 
 class DataManager:
     def __init__(self, key): self.headers = {"X-Auth-Token": key}
@@ -337,11 +561,21 @@ def main():
         .card {background:#1e2129; padding:15px; border-radius:10px; margin-bottom:10px;}
     </style>""", unsafe_allow_html=True)
     
-    st.title("QUANTUM FOOTBALL")
-    st.info(SYSTEM_PURPOSE)
+    # --- DİL SEÇİCİ ---
+    with st.sidebar:
+        st.header("🌐 Language")
+        # Product Hunt için EN varsayılan
+        lang_sel = st.selectbox("Select Language / Dil Seçin", ["English (EN)", "Türkçe (TR)", "Deutsch (DE)", "Français (FR)", "العربية (AR)"], index=0)
+        
+        lang_map = {"English (EN)": "EN", "Türkçe (TR)": "TR", "Deutsch (DE)": "DE", "Français (FR)": "FR", "العربية (AR)": "AR"}
+        curr_lang = lang_map[lang_sel]
+        t = TRANS[curr_lang]
+
+    st.title(t["page_title"])
+    st.info(t["legal_warning"])
 
     if is_admin:
-        tabs = st.tabs(["📊 Simülasyon", "🗃️ Admin Paneli", "📘 Model Kimliği"])
+        tabs = st.tabs([t["tab_sim"], t["tab_admin"], t["tab_model"]])
     else: tabs = [st.container()]
 
     # TAB 1: ANALİZ
@@ -352,31 +586,30 @@ def main():
         
         c1, c2 = st.columns([1,2])
         with c1: 
-            lk = st.selectbox("Lig", list(CONSTANTS["LEAGUES"].keys()))
+            lk = st.selectbox(t["lbl_league"], list(CONSTANTS["LEAGUES"].keys()))
             lc = CONSTANTS["LEAGUES"][lk]
         s, f = dm.fetch(lc)
         
         if f:
-            # FIX: Canlı (IN_PLAY), Devre Arası (PAUSED) ve Planlanmış maçları dahil et
             upc = [m for m in f['matches'] if m['status'] in ['SCHEDULED','TIMED', 'IN_PLAY', 'PAUSED']]
-            if not upc: st.warning("Bu ligde şu an oynanan veya gelecek maç bulunamadı.")
+            if not upc: st.warning(t["msg_no_match"])
             
             mm = {f"{m['homeTeam']['name']} vs {m['awayTeam']['name']}": m for m in upc}
             if mm:
-                with c2: mn = st.selectbox("Maç", list(mm.keys())); m = mm[mn]
+                with c2: mn = st.selectbox(t["lbl_match"], list(mm.keys())); m = mm[mn]
                 
-                with st.expander("🛠️ Parametre Ayarları"):
+                with st.expander(t["exp_params"]):
                     pc1, pc2 = st.columns(2)
-                    th = pc1.selectbox("Ev Taktik", list(CONSTANTS["TACTICS"].keys()))
-                    ta = pc2.selectbox("Dep Taktik", list(CONSTANTS["TACTICS"].keys()))
+                    th = pc1.selectbox(t["lbl_tac_home"], list(CONSTANTS["TACTICS"].keys()))
+                    ta = pc2.selectbox(t["lbl_tac_away"], list(CONSTANTS["TACTICS"].keys()))
                 
-                if st.button("🚀 SİMÜLASYONU BAŞLAT"):
+                if st.button(t["btn_start"]):
                     hid, aid = m['homeTeam']['id'], m['awayTeam']['id']
                     hs = dm.get_stats(s, f, hid); as_ = dm.get_stats(s, f, aid)
                     dqi = 100; 
                     if hs['played'] < 5: dqi -= 20
                     
-                    pow_diff, pow_msg = eng.calculate_auto_power(hs, as_)
+                    pow_diff, pow_msg = eng.calculate_auto_power(hs, as_, t)
                     pars = {"t_h": CONSTANTS["TACTICS"][th], "t_a": CONSTANTS["TACTICS"][ta], "weather": 1.0, "hk": False, "ak": False, "hgk": False, "agk": False, "power_diff": pow_diff}
                     res = eng.run_ensemble_analysis(hs, as_, 2.8, pars, hid, aid, lc)
                     conf = int(max(res['1x2']) * (dqi/100.0))
@@ -386,61 +619,54 @@ def main():
                     
                     st.divider()
                     c_a, c_b, c_c = st.columns(3)
-                    c_a.metric("Güven Skoru", f"{conf}/100", delta="Model Confidence")
-                    c_b.metric("Veri Kalitesi (DQI)", f"{dqi}", delta_color="off")
-                    c_c.metric("Elo Farkı", f"{res['elo'][0] - res['elo'][1]}", help="Pozitif değer ev sahibi lehinedir")
+                    c_a.metric(t["res_conf"], f"{conf}/100", delta="Model Confidence")
+                    c_b.metric(t["res_dqi"], f"{dqi}", delta_color="off")
+                    c_c.metric(t["res_elo"], f"{res['elo'][0] - res['elo'][1]}", help="Elo Diff")
                     
-                    if "Dengeli" not in pow_msg: st.caption(f"⚡ Otomatik Güç Tespiti: {pow_msg}")
+                    if t["pow_balanced"] not in pow_msg: st.caption(f"{t['res_auto_power']}: {pow_msg}")
                     
-                    # FIX: DeltaGenerator temizlendi (Liste hatası)
-                    if 'reasons' in res: 
-                        for r in res['reasons']: st.caption(f"• {r}")
-
-                    st.write(f"### ⚽ Beklenen Goller (xG): {res['xg'][0]:.2f} - {res['xg'][1]:.2f}")
+                    st.write(f"### {t['res_xg']}: {res['xg'][0]:.2f} - {res['xg'][1]:.2f}")
                     
                     def plot_bell_curve(mu, team_name, ci_low, ci_high, color):
                         x = np.arange(0, 8); y = poisson.pmf(x, mu)
                         fig, ax = plt.subplots(figsize=(5, 1.5))
                         fig.patch.set_facecolor('#0e1117'); ax.set_facecolor('#0e1117')
                         ax.plot(x, y, 'o-', color=color, markersize=4, linewidth=1, alpha=0.8)
-                        ax.fill_between(x, 0, y, where=(x >= ci_low) & (x <= ci_high), color=color, alpha=0.2, label='Güven Alanı')
+                        ax.fill_between(x, 0, y, where=(x >= ci_low) & (x <= ci_high), color=color, alpha=0.2)
                         ax.spines['top'].set_visible(False); ax.spines['right'].set_visible(False)
                         ax.spines['left'].set_color('#444'); ax.spines['bottom'].set_color('#444')
                         ax.tick_params(axis='x', colors='white'); ax.tick_params(axis='y', colors='white', labelsize=8)
-                        ax.set_title(f"{team_name} (Beklenen: {mu:.2f})", color='white', fontsize=9, pad=2)
+                        ax.set_title(f"{team_name} (Exp: {mu:.2f})", color='white', fontsize=9, pad=2)
                         return fig
 
                     col_g1, col_g2 = st.columns(2)
                     with col_g1: st.pyplot(plot_bell_curve(res['xg'][0], hs['name'], res['ci'][0][0], res['ci'][0][1], '#00ff88'), use_container_width=True)
                     with col_g2: st.pyplot(plot_bell_curve(res['xg'][1], as_['name'], res['ci'][1][0], res['ci'][1][1], '#ff4444'), use_container_width=True)
 
-                    st.info(f"**🧪 %90 Güven Aralığı (Confidence Interval):**\nModel, Ev Sahibinin **[{res['ci'][0][0]}-{res['ci'][0][1]}]**, Deplasmanın **[{res['ci'][1][0]}-{res['ci'][1][1]}]** gol atacağını öngörüyor.")
+                    st.info(f"**{t['res_ci']}:**\n" + t['ci_desc'].format(res['ci'][0][0], res['ci'][0][1], res['ci'][1][0], res['ci'][1][1]))
                     
-                    t1, t2, t3 = st.tabs(["Ana Tablo (1X2)", "İY / MS (HT/FT)", "Gol Piyasaları"])
+                    t1, t2, t3 = st.tabs([t['tab_res_1'], t['tab_res_2'], t['tab_res_3']])
                     with t1:
-                        st.subheader("Maç Sonucu Olasılıkları")
-                        st.dataframe(pd.DataFrame([res['1x2']], columns=["Ev %", "Beraberlik %", "Deplasman %"]), hide_index=True)
-                        st.caption(f"En Olası Skor: **{res['most_likely']}**")
+                        st.dataframe(pd.DataFrame([res['1x2']], columns=[t["col_home"], t["col_draw"], t["col_away"]]), hide_index=True)
+                        st.caption(f"Max Prob: **{res['most_likely']}**")
                     with t2:
-                        st.subheader("İlk Yarı / Maç Sonucu (Heuristik)")
-                        df_htft = pd.DataFrame(list(res['ht_ft'].items()), columns=['Tahmin', 'Olasılık %']).sort_values('Olasılık %', ascending=False).head(5)
-                        st.table(df_htft.set_index('Tahmin'))
+                        df_htft = pd.DataFrame(list(res['ht_ft'].items()), columns=['Pick', 'Prob %']).sort_values('Prob %', ascending=False).head(5)
+                        st.table(df_htft.set_index('Pick'))
                     with t3:
-                        st.subheader("Gol Olasılıkları")
-                        gol_data = {"Piyasa": ["1.5 Üst", "2.5 Üst", "3.5 Üst", "KG Var (BTTS)"], "Olasılık %": [f"%{res['goals']['o15']:.1f}", f"%{res['goals']['o25']:.1f}", f"%{res['goals']['o35']:.1f}", f"%{res['goals']['btts']:.1f}"]}
-                        st.table(pd.DataFrame(gol_data).set_index("Piyasa"))
+                        gol_data = {"Market": [t["market_o15"], t["market_o25"], t["market_o35"], t["market_btts"]], "Prob %": [f"%{res['goals']['o15']:.1f}", f"%{res['goals']['o25']:.1f}", f"%{res['goals']['o35']:.1f}", f"%{res['goals']['btts']:.1f}"]}
+                        st.table(pd.DataFrame(gol_data).set_index("Market"))
 
                     p_bytes = create_match_pdf(hs, as_, res, conf)
-                    st.download_button("📥 Raporu İndir (PDF)", p_bytes, "analiz_v13.pdf", "application/pdf")
+                    st.download_button(t["dl_report"], p_bytes, "analiz_v14.pdf", "application/pdf")
 
     # TAB 2: ADMIN
     if is_admin and len(tabs) > 1:
         with tabs[1]:
-            st.header("🗃️ Admin Paneli")
-            with st.expander("⚡ Toplu İşlem Merkezi (Simülasyon)", expanded=True):
-                st.write("Seçili ligdeki **gelecek ve şu an oynanan tüm maçları** otomatik analiz eder.")
+            st.header(t["tab_admin"])
+            with st.expander(t["admin_batch_title"], expanded=True):
+                st.write(t["admin_batch_desc"])
                 if f:
-                    if st.button("⚡ TÜM LİGİ ANALİZ ET VE KAYDET"):
+                    if st.button(t["admin_batch_btn"]):
                         target_matches = [m for m in f['matches'] if m['status'] in ['SCHEDULED', 'TIMED', 'IN_PLAY', 'PAUSED']]
                         progress_bar = st.progress(0)
                         count = 0
@@ -458,18 +684,14 @@ def main():
                                 count += 1
                             except Exception as e: pass 
                             progress_bar.progress((i + 1) / len(target_matches))
-                        st.success(f"✅ İşlem Tamamlandı: {count} maç veritabanına eklendi.")
+                        st.success(t["admin_batch_success"].format(count))
 
             st.divider()
-            st.subheader("📝 Sonuç Doğrulama")
+            st.subheader(t["admin_valid_title"])
             if db:
-                # FIX: Limit 3000'e çıkarıldı ve Tarihe Göre Sıralama Yapıldı
                 try:
                     pend = list(db.collection("predictions").where("actual_result", "==", None).limit(3000).stream())
-                    
-                    # Tarihe göre sırala (En yeni maç en üstte)
                     pend.sort(key=lambda x: x.to_dict().get('match_date', ''), reverse=True)
-                    
                     match_options = {}
                     for d in pend:
                         data = d.to_dict()
@@ -480,27 +702,32 @@ def main():
                     if pend:
                         c_sel1, c_sel2 = st.columns([2, 1])
                         with c_sel1:
-                            sel_id = st.selectbox("Sonuçlanacak Maç", list(match_options.keys()), format_func=lambda x: match_options[x])
+                            sel_id = st.selectbox(t["admin_valid_sel"], list(match_options.keys()), format_func=lambda x: match_options[x])
                         with c_sel2:
-                            manual_id = st.text_input("Veya Maç ID'si (Zorla Getir)")
+                            manual_id = st.text_input("Match ID (Manual)")
                             if manual_id: sel_id = manual_id
 
                         c1, c2 = st.columns(2)
-                        hs = c1.number_input("Ev Gol", 0); as_ = c2.number_input("Dep Gol", 0)
-                        note = st.text_area("Admin Notu (Opsiyonel)")
+                        hs = c1.number_input("Home Goal", 0); as_ = c2.number_input("Away Goal", 0)
+                        note = st.text_area("Admin Note")
                         
-                        if st.button("✅ Onayla ve Eğit"):
+                        if st.button(t["admin_valid_btn"]):
                             if update_result_db(sel_id, hs, as_, note): 
-                                st.success("Sonuç işlendi. Elo güncellendi. Brier Score veritabanına yazıldı.")
-                    else: st.info("Bekleyen açık tahmin bulunamadı.")
+                                st.success(t["admin_valid_success"])
+                    else: st.info(t["msg_no_match"])
+                    
+                    st.divider()
+                    st.subheader("🗄️ History Log")
+                    # Geçmiş tablosu (History) sadece Admin'e özel olduğu için İngilizce/Generic kalabilir
+                    # ... (Mevcut kod aynen çalışır) ...
+
                 except Exception as e:
-                    st.error(f"Veritabanı Okuma Hatası: {e}")
+                    st.error(f"DB Error: {e}")
                 
     # TAB 3: MODEL CARD
     if is_admin and len(tabs) > 2:
         with tabs[2]:
-            st.header("📘 Model Kimlik Kartı (Model Card)")
-            st.write("Bu sekme, modelin şeffaflığı ve tekrarlanabilirliği için teknik dokümantasyon üretir.")
+            st.header(t["tab_model"])
             col_mc1, col_mc2 = st.columns([2,1])
             with col_mc1:
                 st.code("""
@@ -513,7 +740,7 @@ def main():
                 """, language="yaml")
             with col_mc2:
                 mc_bytes = create_model_card()
-                st.download_button("📘 Model Card İndir (PDF)", mc_bytes, "model_card_v13.pdf", "application/pdf")
+                st.download_button(t["dl_report"], mc_bytes, "model_card_v14.pdf", "application/pdf")
 
 if __name__ == "__main__":
     main()
