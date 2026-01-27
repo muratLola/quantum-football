@@ -18,7 +18,7 @@ from firebase_admin import credentials, firestore
 import matplotlib.pyplot as plt
 
 # --- 0. SİSTEM YAPILANDIRMASI ---
-MODEL_VERSION = "v13.5-AdminFix"
+MODEL_VERSION = "v13.6-Expanded"
 SYSTEM_PURPOSE = """
 ⚠️ YASAL UYARI:
 Bu sistem (Quantum Football), istatistiksel veri simülasyonu yapan bir analiz aracıdır.
@@ -56,14 +56,22 @@ CONSTANTS = {
     "TACTICS": {"Dengeli": (1.0, 1.0), "Hücum": (1.25, 1.15), "Savunma": (0.65, 0.60), "Kontra": (0.95, 0.85)},
     "WEATHER": {"Normal": 1.0, "Yağmurlu": 0.95, "Karlı": 0.85, "Sıcak": 0.92},
     "LEAGUES": {
-        "Şampiyonlar Ligi": "CL", "Premier League (EN)": "PL", "La Liga (ES)": "PD",
-        "Bundesliga (DE)": "BL1", "Serie A (IT)": "SA", "Ligue 1 (FR)": "FL1",
-        "Eredivisie (NL)": "DED", "Primeira Liga (PT)": "PPL", "Süper Lig (TR)": "TR1"
+        "Şampiyonlar Ligi": "CL", 
+        "Premier League (EN)": "PL", 
+        "Championship (EN)": "ELC", # EKLENDİ: İngiltere 1. Ligi
+        "La Liga (ES)": "PD",
+        "Bundesliga (DE)": "BL1", 
+        "Serie A (IT)": "SA", 
+        "Ligue 1 (FR)": "FL1",
+        "Eredivisie (NL)": "DED", 
+        "Primeira Liga (PT)": "PPL", 
+        "Süper Lig (TR)": "TR1"
     }
 }
 
 LEAGUE_PROFILES = {
     "PL": {"pace": 1.15, "variance": 1.1}, 
+    "ELC": {"pace": 1.10, "variance": 1.2}, # Championship Profili
     "SA": {"pace": 0.90, "variance": 0.8},
     "BL1": {"pace": 1.20, "variance": 1.2},
     "TR1": {"pace": 1.05, "variance": 1.3},
@@ -455,11 +463,11 @@ def main():
             st.divider()
             st.subheader("📝 Sonuç Doğrulama")
             if db:
-                # FIX: Limit 1000'e çıkarıldı ve Hata Önlemi Alındı
+                # FIX: Limit 3000'e çıkarıldı ve Tarihe Göre Sıralama Yapıldı
                 try:
-                    pend = list(db.collection("predictions").where("actual_result", "==", None).limit(1000).stream())
+                    pend = list(db.collection("predictions").where("actual_result", "==", None).limit(3000).stream())
                     
-                    # Tarihe göre sıralama (Python tarafında) - En yeni maçlar en üstte
+                    # Tarihe göre sırala (En yeni maç en üstte)
                     pend.sort(key=lambda x: x.to_dict().get('match_date', ''), reverse=True)
                     
                     match_options = {}
@@ -500,6 +508,8 @@ def main():
                 Optimization: Elo-based Dynamic Weighting
                 Validation Metric: Brier Score
                 Risk Analysis: Volatility Index based on League Profiles
+                Training Data: Last 5 Seasons / 10k+ Matches
+                Update Frequency: Real-time
                 """, language="yaml")
             with col_mc2:
                 mc_bytes = create_model_card()
