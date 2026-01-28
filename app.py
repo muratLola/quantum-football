@@ -514,8 +514,12 @@ def update_result_db(doc_id, hg, ag, notes):
         if not doc.exists: return False
         d = doc.to_dict()
         
+        # --- [CRITICAL FIX] Ensure integers ---
+        hg_int = int(hg)
+        ag_int = int(ag)
+        
         # Sonuç
-        res = "1" if hg > ag else "2" if ag > hg else "X"
+        res = "1" if hg_int > ag_int else "2" if ag_int > hg_int else "X"
         idx = 0 if res == "1" else 1 if res == "X" else 2
         
         # Brier Score
@@ -533,11 +537,13 @@ def update_result_db(doc_id, hg, ag, notes):
             away_name = match_str.split(" vs ")[1]
             elo = EloManager(db)
             if "home_id" in d and "away_id" in d:
-                elo.update(d["home_id"], home_name, d["away_id"], away_name, hg, ag)
+                elo.update(d["home_id"], home_name, d["away_id"], away_name, hg_int, ag_int)
             
         ref.update({
-            "actual_result": res, "actual_score": f"{hg}-{ag}", 
-            "brier_score": float(brier), "validation_status": "VALIDATED",
+            "actual_result": res, 
+            "actual_score": f"{hg_int}-{ag_int}",
+            "brier_score": float(brier), 
+            "validation_status": "VALIDATED",
             "admin_notes": notes
         })
         return True
@@ -547,15 +553,24 @@ def save_pred_db(match, probs, params, user, meta):
     if not db: return
     p1, p2, p3 = float(probs[0]), float(probs[1]), float(probs[2])
     pred = "1" if p1>p2 and p1>p3 else "2" if p3>p1 and p3>p2 else "X"
-    db.collection("predictions").document(str(match['id'])).set({
+    
+    doc_ref = db.collection("predictions").document(str(match['id']))
+    existing = doc_ref.get()
+    
+    data = {
         "match_id": str(match['id']), "match_name": f"{meta['hn']} vs {meta['an']}",
         "match_date": match['utcDate'], "league": meta['lg'],
         "home_id": meta['hid'], "away_id": meta['aid'],
         "home_prob": p1, "draw_prob": p2, "away_prob": p3,
         "predicted_outcome": pred, "confidence": meta['conf'],
         "dqi": meta['dqi'], "user": user, "params": str(params),
-        "model_version": MODEL_VERSION, "actual_result": None
-    }, merge=True)
+        "model_version": MODEL_VERSION
+    }
+    
+    if not existing.exists:
+        data["actual_result"] = None
+        
+    doc_ref.set(data, merge=True)
 
 # -----------------------------------------------------------------------------
 # 4. MAIN UI
@@ -620,7 +635,7 @@ def main():
                     res = eng.run_ensemble_analysis(hs, as_, 2.8, pars, hid, aid, lc)
                     conf = int(max(res['1x2']) * (dqi/100.0))
                     
-                    meta = {"hn": hs['name'], "an": as_['name'], "hid": hid, "aid": aid, "lg": lc, "conf": conf, "dqi": dqi}
+                    meta = {"hn": hs['name'], "an": as_['name'], "hid": h_id, "aid": a_id, "lg": lc, "conf": conf, "dqi": dqi}
                     save_pred_db(m, res['1x2'], pars, current_user, meta)
                     
                     st.divider()
@@ -670,7 +685,7 @@ def main():
         with tabs[1]:
             st.header(t["tab_admin"])
             
-            # --- YENİ SEKMELER: Batch İşlemler | Doğrulama (Pending) | Geçmiş (History) ---
+            # --- YENİ SEKMELER ---
             adm_t1, adm_t2, adm_t3 = st.tabs([t["admin_batch_title"], t["admin_valid_title"], t["admin_completed_title"]])
             
             # 1. BATCH PROCESSING
@@ -700,81 +715,57 @@ def main():
             # 2. SONUÇ DOĞRULAMA (PENDING)
             with adm_t2:
                 if db is None:
-                    st.error("Veritabanı bağlantısı yok! (db is None). Lütfen Firebase ayarlarını kontrol et.")
+                    st.error("Veritabanı bağlantısı yok!")
                 else:
                     try:
-                        # -----------------------------------------------
-                        # HIZLANDIRMA: Limit 1000'e çekildi (Eskisi 3000)
-                        # -----------------------------------------------
-                        pend_ref = db.collection("predictions").where("actual_result", "==", None).limit(1000)
+                        # Limit 500 ve Eski maçlar üstte
+                        pend_ref = db.collection("predictions").where("actual_result", "==", None).limit(500)
                         pend = list(pend_ref.stream())
-                        
-                        # Tarihe göre sırala
-                        pend.sort(key=lambda x: x.to_dict().get('match_date', '0000'), reverse=True)
+                        pend.sort(key=lambda x: x.to_dict().get('match_date', '0000'), reverse=False)
                         
                         match_options = {}
                         seen_matches = set()
 
-                        # -----------------------------------------------
-                        # ÇİFT KAYIT ENGELLEME (Gelişmiş)
-                        # -----------------------------------------------
                         for d in pend:
                             data = d.to_dict()
-                            # İsimlendirme garantisi
+                            # İsim bulma garantisi (Fallback)
                             label = data.get('match_name') or data.get('match') or f"Maç {d.id}"
                             date = str(data.get('match_date', ''))[:10]
                             unique_key = f"{label}_{date}"
                             
-                            # EĞER bu isim+tarih kombinasyonu daha önce eklenmediyse ekle
                             if unique_key not in seen_matches:
                                 match_options[d.id] = f"{label} ({date})"
                                 seen_matches.add(unique_key)
                         
                         if match_options:
-                            # -----------------------------------------------
-                            # FORM YAPISI: Kaydetme sorununu çözer
-                            # -----------------------------------------------
                             with st.form("validation_form", clear_on_submit=False):
                                 st.write("### 📝 Maç Sonucu Gir")
-                                
                                 c_sel1, c_sel2 = st.columns([2, 1])
                                 with c_sel1:
-                                    # Selectbox'tan seçilen ID
-                                    selected_option_id = st.selectbox(
-                                        t["admin_valid_sel"], 
-                                        options=list(match_options.keys()), 
-                                        format_func=lambda x: match_options[x]
-                                    )
+                                    selected_option_id = st.selectbox(t["admin_valid_sel"], options=list(match_options.keys()), format_func=lambda x: match_options[x])
                                 with c_sel2:
                                     manual_id = st.text_input("Match ID (Manuel - Opsiyonel)")
                                 
                                 final_id = manual_id if manual_id else selected_option_id
-
                                 c1, c2 = st.columns(2)
                                 hs = c1.number_input("Home Goal", min_value=0, step=1)
                                 as_ = c2.number_input("Away Goal", min_value=0, step=1)
                                 note = st.text_area("Admin Note")
-                                
-                                # Form Gönderme Butonu
                                 submitted = st.form_submit_button(t["admin_valid_btn"])
                                 
                                 if submitted:
                                     if not final_id:
-                                        st.error("Lütfen bir maç seçin veya ID girin.")
+                                        st.error("Lütfen bir maç seçin.")
                                     else:
                                         with st.spinner("Veritabanı güncelleniyor..."):
-                                            success = update_result_db(final_id, hs, as_, note)
-                                            
-                                            if success:
+                                            if update_result_db(final_id, hs, as_, note):
                                                 st.success(f"✅ {match_options.get(final_id, final_id)} başarıyla kaydedildi!")
-                                                time.sleep(1.0) # Mesajın okunması için bekle
-                                                st.rerun()      # Sayfayı yenile
+                                                time.sleep(1.0)
+                                                st.rerun()
                                             else:
-                                                st.error("❌ Kayıt sırasında hata oluştu.")
-                                                
+                                                st.error("❌ Kayıt hatası.")
                         else:
                             st.info(t["msg_no_match"])
-                            
                     except Exception as e:
                         st.error(f"Panel Hatası: {e}")
 
@@ -782,16 +773,21 @@ def main():
             with adm_t3:
                 if db:
                     try:
-                        # Sadece sonucu girilmiş (VALIDATED) maçları getir
-                        validated_refs = db.collection("predictions").where("validation_status", "==", "VALIDATED").limit(50).stream()
+                        # [CRITICAL FIX] İsim Görünmeme Sorunu Çözümü
+                        validated_refs = list(db.collection("predictions").where("validation_status", "==", "VALIDATED").limit(100).stream())
+                        # Yeniden eskiye sırala
+                        validated_refs.sort(key=lambda x: x.to_dict().get('match_date', '0000'), reverse=True)
                         
                         val_data = []
                         for v in validated_refs:
                             vd = v.to_dict()
+                            # İsim yoksa 'match' anahtarına bak, o da yoksa ID yaz
+                            match_label = vd.get("match_name") or vd.get("match") or f"Maç {v.id}"
+                            
                             val_data.append({
-                                "Match": vd.get("match_name"),
+                                "Match": match_label,
                                 "Date": vd.get("match_date", "")[:10],
-                                "Score": vd.get("actual_score"),
+                                "Score": vd.get("actual_score") or f"{vd.get('home_score',0)}-{vd.get('away_score',0)}",
                                 "Brier": f"{vd.get('brier_score', 0):.4f}",
                                 "Note": vd.get("admin_notes")
                             })
@@ -800,7 +796,6 @@ def main():
                             st.dataframe(pd.DataFrame(val_data))
                         else:
                             st.info("Henüz doğrulanmış maç yok.")
-                            
                     except Exception as e:
                         st.error(f"History Error: {e}")
 
