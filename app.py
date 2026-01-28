@@ -13,6 +13,7 @@ from scipy.stats import poisson
 import hmac
 import hashlib
 import random
+import time
 import firebase_admin
 from firebase_admin import credentials, firestore
 import matplotlib.pyplot as plt
@@ -58,11 +59,12 @@ TRANS = {
         "admin_batch_desc": "Analyzes all upcoming and live matches in the selected league.",
         "admin_batch_btn": "⚡ ANALYZE FULL LEAGUE",
         "admin_batch_success": "✅ Operation Complete: {0} matches added to database.",
-        "admin_valid_title": "📝 Result Validation",
-        "admin_valid_sel": "Match to Validate",
-        "admin_valid_btn": "✅ Confirm & Train",
-        "admin_valid_success": "Result processed. Elo updated. Brier Score logged.",
-        "msg_no_match": "No upcoming or live matches found in this league.",
+        "admin_valid_title": "📝 Result Validation (Pending)",
+        "admin_completed_title": "✅ Validated Matches (History)",
+        "admin_valid_sel": "Select Match to Validate",
+        "admin_valid_btn": "✅ Save Result & Update Elo",
+        "admin_valid_success": "Result saved successfully! Updating system...",
+        "msg_no_match": "No matches found.",
         "msg_wait": "Pending...",
         "pow_dominant": "Dominant",
         "pow_strong": "Strong",
@@ -103,11 +105,12 @@ TRANS = {
         "admin_batch_desc": "Seçili ligdeki tüm gelecek ve canlı maçları analiz eder.",
         "admin_batch_btn": "⚡ TÜM LİGİ ANALİZ ET",
         "admin_batch_success": "✅ İşlem Tamamlandı: {0} maç eklendi.",
-        "admin_valid_title": "📝 Sonuç Doğrulama",
-        "admin_valid_sel": "Sonuçlanacak Maç",
-        "admin_valid_btn": "✅ Onayla ve Eğit",
-        "admin_valid_success": "Sonuç işlendi. Elo güncellendi. Brier Score kaydedildi.",
-        "msg_no_match": "Bu ligde şu an oynanan veya gelecek maç bulunamadı.",
+        "admin_valid_title": "📝 Sonuç Doğrulama (Bekleyenler)",
+        "admin_completed_title": "✅ Tamamlanan Maçlar (Geçmiş)",
+        "admin_valid_sel": "Sonuçlanacak Maçı Seç",
+        "admin_valid_btn": "✅ Sonucu Kaydet ve Elo'yu İşle",
+        "admin_valid_success": "Maç sonucu başarıyla kaydedildi! Liste güncelleniyor...",
+        "msg_no_match": "Kriterlere uygun maç bulunamadı.",
         "msg_wait": "Bekleniyor...",
         "pow_dominant": "Dominant",
         "pow_strong": "Güçlü",
@@ -115,7 +118,7 @@ TRANS = {
         "pow_balanced": "Dengeli",
         "dl_report": "📥 Raporu İndir (PDF)"
     },
-    "DE": {
+     "DE": {
         "page_title": "QUANTUM FUSSBALL",
         "legal_warning": "⚠️ HAFTUNGSAUSSCHLUSS:\nDies ist ein statistisches Simulationswerkzeug.\nEs bietet KEINE Wett- oder Finanzberatung.",
         "tab_sim": "📊 Simulation",
@@ -149,9 +152,10 @@ TRANS = {
         "admin_batch_btn": "⚡ LIGA ANALYSIEREN",
         "admin_batch_success": "✅ Fertig: {0} Spiele hinzugefügt.",
         "admin_valid_title": "📝 Ergebnisvalidierung",
+        "admin_completed_title": "✅ Abgeschlossene Spiele",
         "admin_valid_sel": "Spiel auswählen",
         "admin_valid_btn": "✅ Bestätigen & Trainieren",
-        "admin_valid_success": "Ergebnis verarbeitet. Elo aktualisiert.",
+        "admin_valid_success": "Ergebnis gespeichert!",
         "msg_no_match": "Keine Spiele gefunden.",
         "msg_wait": "Warten...",
         "pow_dominant": "Dominant",
@@ -194,9 +198,10 @@ TRANS = {
         "admin_batch_btn": "⚡ ANALYSER LA LIGUE",
         "admin_batch_success": "✅ Terminé: {0} matchs ajoutés.",
         "admin_valid_title": "📝 Validation Résultats",
+        "admin_completed_title": "✅ Matchs Validés",
         "admin_valid_sel": "Match à Valider",
         "admin_valid_btn": "✅ Confirmer & Entraîner",
-        "admin_valid_success": "Résultat traité. Elo mis à jour.",
+        "admin_valid_success": "Résultat enregistré!",
         "msg_no_match": "Aucun match trouvé.",
         "msg_wait": "En attente...",
         "pow_dominant": "Dominant",
@@ -239,9 +244,10 @@ TRANS = {
         "admin_batch_btn": "⚡ تحليل الدوري بالكامل",
         "admin_batch_success": "✅ اكتملت العملية: تمت إضافة {0} مباراة.",
         "admin_valid_title": "📝 التحقق من النتائج",
+        "admin_completed_title": "✅ المباريات المكتملة",
         "admin_valid_sel": "المباراة للتحقق",
         "admin_valid_btn": "✅ تأكيد وتدريب",
-        "admin_valid_success": "تمت معالجة النتيجة. تم تحديث Elo.",
+        "admin_valid_success": "تم حفظ النتيجة بنجاح!",
         "msg_no_match": "لا توجد مباريات قادمة.",
         "msg_wait": "قيد الانتظار...",
         "pow_dominant": "مهيمن",
@@ -663,7 +669,12 @@ def main():
     if is_admin and len(tabs) > 1:
         with tabs[1]:
             st.header(t["tab_admin"])
-            with st.expander(t["admin_batch_title"], expanded=True):
+            
+            # --- YENİ SEKMELER: Batch İşlemler | Doğrulama (Pending) | Geçmiş (History) ---
+            adm_t1, adm_t2, adm_t3 = st.tabs([t["admin_batch_title"], t["admin_valid_title"], t["admin_completed_title"]])
+            
+            # 1. BATCH PROCESSING
+            with adm_t1:
                 st.write(t["admin_batch_desc"])
                 if f:
                     if st.button(t["admin_batch_btn"]):
@@ -686,44 +697,75 @@ def main():
                             progress_bar.progress((i + 1) / len(target_matches))
                         st.success(t["admin_batch_success"].format(count))
 
-            st.divider()
-            st.subheader(t["admin_valid_title"])
-            if db:
-                try:
-                    pend = list(db.collection("predictions").where("actual_result", "==", None).limit(3000).stream())
-                    pend.sort(key=lambda x: x.to_dict().get('match_date', ''), reverse=True)
-                    match_options = {}
-                    for d in pend:
-                        data = d.to_dict()
-                        label = data.get('match_name') or data.get('match') or f"Maç {d.id}"
-                        date = data.get('match_date', '')[:10]
-                        match_options[d.id] = f"{label} ({date})"
-
-                    if pend:
-                        c_sel1, c_sel2 = st.columns([2, 1])
-                        with c_sel1:
-                            sel_id = st.selectbox(t["admin_valid_sel"], list(match_options.keys()), format_func=lambda x: match_options[x])
-                        with c_sel2:
-                            manual_id = st.text_input("Match ID (Manual)")
-                            if manual_id: sel_id = manual_id
-
-                        c1, c2 = st.columns(2)
-                        hs = c1.number_input("Home Goal", 0); as_ = c2.number_input("Away Goal", 0)
-                        note = st.text_area("Admin Note")
+            # 2. SONUÇ DOĞRULAMA (PENDING)
+            with adm_t2:
+                if db:
+                    try:
+                        pend = list(db.collection("predictions").where("actual_result", "==", None).limit(3000).stream())
+                        pend.sort(key=lambda x: x.to_dict().get('match_date', ''), reverse=True)
                         
-                        if st.button(t["admin_valid_btn"]):
-                            if update_result_db(sel_id, hs, as_, note): 
-                                st.success(t["admin_valid_success"])
-                    else: st.info(t["msg_no_match"])
-                    
-                    st.divider()
-                    st.subheader("🗄️ History Log")
-                    # Geçmiş tablosu (History) sadece Admin'e özel olduğu için İngilizce/Generic kalabilir
-                    # ... (Mevcut kod aynen çalışır) ...
+                        match_options = {}
+                        seen_matches = set() # Çiftleri engellemek için
 
-                except Exception as e:
-                    st.error(f"DB Error: {e}")
-                
+                        for d in pend:
+                            data = d.to_dict()
+                            label = data.get('match_name') or data.get('match') or f"Maç {d.id}"
+                            date = data.get('match_date', '')[:10]
+                            unique_key = f"{label}_{date}"
+                            
+                            # EĞER bu maç daha önce listeye eklenmediyse ekle
+                            if unique_key not in seen_matches:
+                                match_options[d.id] = f"{label} ({date})"
+                                seen_matches.add(unique_key)
+                        
+                        if match_options:
+                            c_sel1, c_sel2 = st.columns([2, 1])
+                            with c_sel1:
+                                sel_id = st.selectbox(t["admin_valid_sel"], list(match_options.keys()), format_func=lambda x: match_options[x])
+                            with c_sel2:
+                                manual_id = st.text_input("Match ID (Manual)")
+                                if manual_id: sel_id = manual_id
+
+                            c1, c2 = st.columns(2)
+                            hs = c1.number_input("Home Goal", 0); as_ = c2.number_input("Away Goal", 0)
+                            note = st.text_area("Admin Note")
+                            
+                            if st.button(t["admin_valid_btn"]):
+                                if update_result_db(sel_id, hs, as_, note): 
+                                    st.success(t["admin_valid_success"])
+                                    time.sleep(1) # Kullanıcının mesajı görmesi için bekle
+                                    st.rerun() # Sayfayı yenile ve maçı listeden düşür
+                        else:
+                            st.info(t["msg_no_match"])
+                    except Exception as e:
+                        st.error(f"DB Error: {e}")
+
+            # 3. GEÇMİŞ (COMPLETED MATCHES)
+            with adm_t3:
+                if db:
+                    try:
+                        # Sadece sonucu girilmiş (VALIDATED) maçları getir
+                        validated_refs = db.collection("predictions").where("validation_status", "==", "VALIDATED").limit(50).stream()
+                        
+                        val_data = []
+                        for v in validated_refs:
+                            vd = v.to_dict()
+                            val_data.append({
+                                "Match": vd.get("match_name"),
+                                "Date": vd.get("match_date", "")[:10],
+                                "Score": vd.get("actual_score"),
+                                "Brier": f"{vd.get('brier_score', 0):.4f}",
+                                "Note": vd.get("admin_notes")
+                            })
+                        
+                        if val_data:
+                            st.dataframe(pd.DataFrame(val_data))
+                        else:
+                            st.info("Henüz doğrulanmış maç yok.")
+                            
+                    except Exception as e:
+                        st.error(f"History Error: {e}")
+
     # TAB 3: MODEL CARD
     if is_admin and len(tabs) > 2:
         with tabs[2]:
