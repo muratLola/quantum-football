@@ -699,46 +699,84 @@ def main():
 
             # 2. SONUÇ DOĞRULAMA (PENDING)
             with adm_t2:
-                if db:
+                if db is None:
+                    st.error("Veritabanı bağlantısı yok! (db is None). Lütfen Firebase ayarlarını kontrol et.")
+                else:
                     try:
-                        pend = list(db.collection("predictions").where("actual_result", "==", None).limit(3000).stream())
-                        pend.sort(key=lambda x: x.to_dict().get('match_date', ''), reverse=True)
+                        # -----------------------------------------------
+                        # HIZLANDIRMA: Limit 1000'e çekildi (Eskisi 3000)
+                        # -----------------------------------------------
+                        pend_ref = db.collection("predictions").where("actual_result", "==", None).limit(1000)
+                        pend = list(pend_ref.stream())
+                        
+                        # Tarihe göre sırala
+                        pend.sort(key=lambda x: x.to_dict().get('match_date', '0000'), reverse=True)
                         
                         match_options = {}
-                        seen_matches = set() # Çiftleri engellemek için
+                        seen_matches = set()
 
+                        # -----------------------------------------------
+                        # ÇİFT KAYIT ENGELLEME (Gelişmiş)
+                        # -----------------------------------------------
                         for d in pend:
                             data = d.to_dict()
+                            # İsimlendirme garantisi
                             label = data.get('match_name') or data.get('match') or f"Maç {d.id}"
-                            date = data.get('match_date', '')[:10]
+                            date = str(data.get('match_date', ''))[:10]
                             unique_key = f"{label}_{date}"
                             
-                            # EĞER bu maç daha önce listeye eklenmediyse ekle
+                            # EĞER bu isim+tarih kombinasyonu daha önce eklenmediyse ekle
                             if unique_key not in seen_matches:
                                 match_options[d.id] = f"{label} ({date})"
                                 seen_matches.add(unique_key)
                         
                         if match_options:
-                            c_sel1, c_sel2 = st.columns([2, 1])
-                            with c_sel1:
-                                sel_id = st.selectbox(t["admin_valid_sel"], list(match_options.keys()), format_func=lambda x: match_options[x])
-                            with c_sel2:
-                                manual_id = st.text_input("Match ID (Manual)")
-                                if manual_id: sel_id = manual_id
+                            # -----------------------------------------------
+                            # FORM YAPISI: Kaydetme sorununu çözer
+                            # -----------------------------------------------
+                            with st.form("validation_form", clear_on_submit=False):
+                                st.write("### 📝 Maç Sonucu Gir")
+                                
+                                c_sel1, c_sel2 = st.columns([2, 1])
+                                with c_sel1:
+                                    # Selectbox'tan seçilen ID
+                                    selected_option_id = st.selectbox(
+                                        t["admin_valid_sel"], 
+                                        options=list(match_options.keys()), 
+                                        format_func=lambda x: match_options[x]
+                                    )
+                                with c_sel2:
+                                    manual_id = st.text_input("Match ID (Manuel - Opsiyonel)")
+                                
+                                final_id = manual_id if manual_id else selected_option_id
 
-                            c1, c2 = st.columns(2)
-                            hs = c1.number_input("Home Goal", 0); as_ = c2.number_input("Away Goal", 0)
-                            note = st.text_area("Admin Note")
-                            
-                            if st.button(t["admin_valid_btn"]):
-                                if update_result_db(sel_id, hs, as_, note): 
-                                    st.success(t["admin_valid_success"])
-                                    time.sleep(1) # Kullanıcının mesajı görmesi için bekle
-                                    st.rerun() # Sayfayı yenile ve maçı listeden düşür
+                                c1, c2 = st.columns(2)
+                                hs = c1.number_input("Home Goal", min_value=0, step=1)
+                                as_ = c2.number_input("Away Goal", min_value=0, step=1)
+                                note = st.text_area("Admin Note")
+                                
+                                # Form Gönderme Butonu
+                                submitted = st.form_submit_button(t["admin_valid_btn"])
+                                
+                                if submitted:
+                                    if not final_id:
+                                        st.error("Lütfen bir maç seçin veya ID girin.")
+                                    else:
+                                        with st.spinner("Veritabanı güncelleniyor..."):
+                                            success = update_result_db(final_id, hs, as_, note)
+                                            
+                                            if success:
+                                                st.success(f"✅ {match_options.get(final_id, final_id)} başarıyla kaydedildi!")
+                                                time.sleep(1.0) # Mesajın okunması için bekle
+                                                st.rerun()      # Sayfayı yenile
+                                            else:
+                                                st.error("❌ Kayıt sırasında hata oluştu.")
+                                                
                         else:
                             st.info(t["msg_no_match"])
+                            
                     except Exception as e:
-                        st.error(f"DB Error: {e}")
+                        st.error(f"Panel Hatası: {e}")
 
             # 3. GEÇMİŞ (COMPLETED MATCHES)
             with adm_t3:
