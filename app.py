@@ -15,7 +15,7 @@ from scipy.stats import poisson
 import functools
 
 # --- 0. SİSTEM VE KONFIGURASYON ---
-MODEL_VERSION = "v31.0-Lazarus"
+MODEL_VERSION = "v32.0-Phoenix"
 
 st.set_page_config(page_title="QUANTUM FOOTBALL", page_icon="⚽", layout="wide")
 np.random.seed(42)
@@ -121,28 +121,22 @@ class AnalyticsEngine:
     def run_simulation(self, h_stats, a_stats, lg_stats, params, h_id, a_id, league_code, roster_factor, high_precision=False):
         l_prof = LEAGUE_PROFILES.get(league_code, LEAGUE_PROFILES["DEFAULT"])
         
-        # 1. TEMEL DEĞİŞKENLER (FIX: NameError Çözümü için değişkenlere atama)
+        # 1. TEMEL DEĞİŞKENLER (Safe Assign)
         h_played = max(1, h_stats.get('home_played', h_stats.get('played', 1)/2))
         a_played = max(1, a_stats.get('away_played', a_stats.get('played', 1)/2))
         
-        # Saldırı/Savunma Güçleri
-        h_att_val = h_stats.get('home_gf', 0) / h_played / lg_stats.get('home_avg_goals', 1.5)
-        h_def_val = h_stats.get('home_ga', 0) / h_played / lg_stats.get('away_avg_goals', 1.2)
-        a_att_val = a_stats.get('away_gf', 0) / a_played / lg_stats.get('away_avg_goals', 1.2)
-        a_def_val = a_stats.get('away_ga', 0) / a_played / lg_stats.get('home_avg_goals', 1.5)
-        
-        # FIX: Grafiklerde kullanılacak değişkenleri burada tanımlıyoruz
-        has = h_att_val
-        hdw = h_def_val
-        aas = a_att_val
-        adw = a_def_val
+        # Grafik ve Hesaplama Değişkenleri (has, hdw vb.)
+        has = h_stats.get('home_gf', 0) / h_played / lg_stats.get('home_avg_goals', 1.5)
+        hdw = h_stats.get('home_ga', 0) / h_played / lg_stats.get('away_avg_goals', 1.2)
+        aas = a_stats.get('away_gf', 0) / a_played / lg_stats.get('away_avg_goals', 1.2)
+        adw = a_stats.get('away_ga', 0) / a_played / lg_stats.get('home_avg_goals', 1.5)
         
         # 2. EWMA FORM
         h_form = (h_stats.get('form_home', 1.0)*0.65 + h_stats.get('form_overall', 1.0)*0.35)
         a_form = (a_stats.get('form_away', 1.0)*0.65 + a_stats.get('form_overall', 1.0)*0.35)
         form_diff = (h_form - a_form) * 0.22 
 
-        # 3. ELO & HOME ADVANTAGE
+        # 3. ELO
         elo_h = self.elo_manager.get_elo(h_id, h_stats['name']) if self.elo_manager else 1500
         elo_a = self.elo_manager.get_elo(a_id, a_stats['name']) if self.elo_manager else 1500
         elo_diff = elo_h - elo_a
@@ -244,7 +238,6 @@ def update_result_db(doc_id, hg, ag, notes):
     try:
         ref = db.collection("predictions").document(str(doc_id)); d = ref.get().to_dict()
         res = "1" if int(hg)>int(ag) else "2" if int(ag)>int(hg) else "X"
-        # FIX: Güvenli veri çekme (varsayılan değerler)
         p = np.array([d.get("home_prob",33), d.get("draw_prob",33), d.get("away_prob",33)])/100
         o = np.zeros(3); o[0 if res=="1" else 1 if res=="X" else 2] = 1
         brier = np.sum((p-o)**2); rps = (p[0]-o[0])**2 + (p[0]+p[1]-o[0]-o[1])**2 
@@ -260,15 +253,15 @@ def auto_sync_results():
     
     if not pending: st.info("Veritabanında eksik maç yok."); return 0
     
-    # FIX: Tarih filtresini kaldır ve son 60 günü zorla tara (En garanti yol)
-    date_from = (datetime.utcnow() - timedelta(days=60)).strftime("%Y-%m-%d")
+    # FIX: Tarih kısıtlamasını kaldır (Tüm sezonu tara)
     leagues = set([d.to_dict().get("league") for d in pending])
-    st.info(f"{len(pending)} açık tahmin bulundu. Son 60 gün taranıyor...")
+    st.info(f"{len(pending)} eksik tahmin bulundu. Tüm sezon taranıyor...")
     
     for code in leagues:
         try:
             time.sleep(6) # Anti-Ban
-            url = f"{CONSTANTS['API_URL']}/competitions/{code}/matches?status=FINISHED&dateFrom={date_from}"
+            # dateFrom olmadan, tüm bitmiş maçları çek
+            url = f"{CONSTANTS['API_URL']}/competitions/{code}/matches?status=FINISHED"
             r = requests.get(url, headers=headers).json()
             if 'matches' not in r: continue
             
@@ -278,7 +271,7 @@ def auto_sync_results():
                 if d.get("league") == code and mid in fin:
                     m = fin[mid]; hg=m['score']['fullTime']['home']; ag=m['score']['fullTime']['away']
                     if hg is not None:
-                        update_result_db(mid, hg, ag, "AutoSync v31")
+                        update_result_db(mid, hg, ag, "AutoSync v32")
                         count += 1
                         st.markdown(f"<div class='success-log'>✅ {d['match_name']}: {hg}-{ag}</div>", unsafe_allow_html=True)
         except Exception as e: st.markdown(f"<div class='error-log'>⚠️ Sync Error ({code}): {e}</div>", unsafe_allow_html=True)
@@ -304,7 +297,7 @@ def create_score_heatmap(matrix, h_name, a_name):
 
 def create_radar(hs, as_, vectors):
     cats = ['Attack', 'Defense', 'Momentum (Form)', 'Elo Rating']
-    # FIX: Değişken isimleri düzeltildi (vectors tuple'dan çekildi)
+    # Vectors: (has, hdw, aas, adw)
     h_v = [min(100, vectors[0]*50), min(100, (2-vectors[1])*50), hs.get('form_home', 1)*80, 85]
     a_v = [min(100, vectors[2]*50), min(100, (2-vectors[3])*50), as_.get('form_away', 1)*80, 80]
     fig = go.Figure()
@@ -315,6 +308,10 @@ def create_radar(hs, as_, vectors):
 
 # --- 5. MAIN ---
 def main():
+    # --- FIX: User Tanımlaması (Eksik Olan Satır) ---
+    q = st.query_params
+    user = q.get("user_email", "Guest")
+    
     if 'admin' not in st.session_state: st.session_state.admin = False
     
     with st.sidebar:
@@ -365,6 +362,7 @@ def main():
                     
                     dqi = 100 if hs.get('home_played',0) > 3 else 75
                     conf = int(max(res['probs']['1'], res['probs']['X'], res['probs']['2']) * 0.9 * (dqi/100))
+                    # FIX: USER değişkeni artık tanımlı
                     save_pred_db(m, [res['probs']['1'], res['probs']['X'], res['probs']['2']], pars, user, {'hn': hs['name'], 'an': as_['name'], 'hid': h_id, 'aid': a_id, 'lg': lc, 'conf': conf, 'dqi': dqi})
 
                     st.markdown(f"<div class='narrative-box'>{res['narrative']}</div>", unsafe_allow_html=True); st.write("")
@@ -407,9 +405,9 @@ def main():
         if st.session_state.admin:
             st.header("🛡️ System Core"); at1, at2, at3 = st.tabs(["Smart Sync", "Manual", "Tools"])
             with at1:
-                st.info("Algoritma: Veritabanındaki eksik maçları (None) bulur ve tarih farketmeksizin son 60 günü tarayarak eşleştirir.")
-                if st.button("🔄 START AUTO-SYNC (60 DAYS FORCE)"):
-                    with st.spinner("Deep scanning..."):
+                st.info("Algoritma: Veritabanındaki eksik maçları (None) bulur ve tarih kısıtlaması olmaksızın (Tüm Sezon) tarayarak eşleştirir.")
+                if st.button("🔄 START FULL AUTO-SYNC"):
+                    with st.spinner("Deep scanning all finished matches..."):
                         c = auto_sync_results()
                         if c > 0: st.success(f"{c} matches synced.")
                         else: st.warning("Up to date.")
