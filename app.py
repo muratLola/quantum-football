@@ -14,7 +14,7 @@ from firebase_admin import credentials, firestore
 from scipy.stats import poisson
 
 # --- 0. SİSTEM VE KONFIGURASYON ---
-MODEL_VERSION = "v24.1-PureScience-Dev"
+MODEL_VERSION = "v25.0-AutoSync"
 
 st.set_page_config(page_title="QUANTUM FOOTBALL", page_icon="⚽", layout="wide")
 np.random.seed(42)
@@ -29,6 +29,7 @@ st.markdown("""
         .narrative-box {background: rgba(0, 200, 255, 0.1); padding: 15px; border-radius: 8px; border-left: 4px solid #00c8ff; font-style: italic;}
         .stButton>button {background-color: #00ff88; color: #000; font-weight: bold; border: none; width: 100%; transition: all 0.3s;}
         .stButton>button:hover {background-color: #00cc6a; color: #fff; transform: scale(1.02);}
+        .success-log {color: #00ff88; font-size: 0.85rem; font-family: monospace;}
     </style>
 """, unsafe_allow_html=True)
 
@@ -66,22 +67,17 @@ class AnalyticsEngine:
 
     def get_ai_narrative(self, h_name, a_name, probs, entropy, xg_h, xg_a, form_h, form_a):
         static = f"⚠️ **Yüksek Varyans:** {h_name} vs {a_name} maçında belirsizlik yüksek." if entropy > 1.55 else f"✅ **İstatistiksel Avantaj:** {h_name if xg_h > xg_a else a_name}."
-        
         if GEMINI_API_KEY:
             try:
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
                 headers = {'Content-Type': 'application/json'}
                 prompt_text = f"Futbol analisti. Maç: {h_name} (Form: {form_h:.2f}) vs {a_name} (Form: {form_a:.2f}). xG: {xg_h:.2f}-{xg_a:.2f}. Olasılıklar: Ev%{probs['1']:.1f}, Dep%{probs['2']:.1f}. Entropi: {entropy:.2f}. Teknik dille 2 cümlelik analiz yap."
                 payload = {"contents": [{"parts": [{"text": prompt_text}]}]}
-                
-                response = requests.post(url, headers=headers, json=payload, timeout=10) # Timeout 10sn yapıldı
-                
+                response = requests.post(url, headers=headers, json=payload, timeout=10)
                 if response.status_code == 200:
                     return f"🤖 **Gemini AI:** {response.json()['candidates'][0]['content']['parts'][0]['text']}"
-                else:
-                    return f"{static} (AI Error: {response.status_code})"
-            except Exception as e:
-                return f"{static} (AI Connection Error)"
+                else: return static
+            except: return static
         return static
 
     def calculate_match_specific_rho(self, projected_total_xg):
@@ -185,6 +181,40 @@ def update_result_db(doc_id, hg, ag, notes):
         return True
     except: return False
 
+def auto_sync_results():
+    """API'den biten maçları çeker ve DB'de eksik olanları tamamlar"""
+    if not db: return 0
+    api = st.secrets.get("FOOTBALL_API_KEY"); headers = {"X-Auth-Token": api}
+    count = 0
+    
+    # Tüm ligleri tara
+    for code in CONSTANTS["LEAGUES"].values():
+        try:
+            url = f"{CONSTANTS['API_URL']}/competitions/{code}/matches?status=FINISHED"
+            r = requests.get(url, headers=headers).json()
+            if 'matches' not in r: continue
+            
+            for m in r['matches']:
+                mid = str(m['id'])
+                doc_ref = db.collection("predictions").document(mid)
+                doc = doc_ref.get()
+                
+                # Eğer maç DB'de varsa AMA sonucu girilmemişse
+                if doc.exists:
+                    d = doc.to_dict()
+                    if d.get('actual_result') is None:
+                        hg = m['score']['fullTime']['home']
+                        ag = m['score']['fullTime']['away']
+                        
+                        # Sonucu güncelle
+                        if hg is not None and ag is not None:
+                            update_result_db(mid, hg, ag, "Auto-Sync by System")
+                            count += 1
+                            st.markdown(f"<div class='success-log'>✅ Güncellendi: {d['match_name']} ({hg}-{ag})</div>", unsafe_allow_html=True)
+        except Exception as e:
+            st.error(f"Sync Error ({code}): {e}")
+    return count
+
 def save_pred_db(m, probs, params, user, meta):
     if not db: return
     p1, p2, p3 = float(probs[0]), float(probs[1]), float(probs[2])
@@ -209,12 +239,8 @@ def create_radar(hs, as_, vectors):
 # --- 5. MAIN ---
 def main():
     q = st.query_params; user = q.get("user_email", "Guest"); is_admin = False
-    
-    # --- ADMIN BYPASS (GELİŞTİRİCİ İÇİN) ---
     if "@" in user:
-        if user.lower().strip() in [a.lower() for a in ADMIN_EMAILS]:
-            is_admin = True
-    # ----------------------------------------
+        if user.lower().strip() in [a.lower() for a in ADMIN_EMAILS]: is_admin = True
 
     with st.sidebar:
         st.header("🌐 Dil / Language"); lang = "TR" if "TR" in st.selectbox("Dil", ["Türkçe (TR)", "English (EN)"]) else "EN"; t = TRANS[lang]
@@ -249,14 +275,11 @@ def main():
                     hs['form_overall'] = dm.get_form(fixtures, h_id, 'ALL'); hs['form_home'] = dm.get_form(fixtures, h_id, 'HOME')
                     as_['form_overall'] = dm.get_form(fixtures, a_id, 'ALL'); as_['form_away'] = dm.get_form(fixtures, a_id, 'AWAY')
                     pars = {"t_h": CONSTANTS["TACTICS"][th], "t_a": CONSTANTS["TACTICS"][ta]}
-                    
                     with st.spinner("Analitik Motoru Çalışıyor..."):
                         res = eng.run_simulation(hs, as_, lg_stats, pars, h_id, a_id, lc, roster_f, high_prec)
-                    
                     dqi = 100 if hs.get('played',0) > 5 else 80
                     conf = int(max(res['probs']['1'], res['probs']['X'], res['probs']['2']) * 0.95 * (dqi/100))
                     save_pred_db(m, [res['probs']['1'], res['probs']['X'], res['probs']['2']], pars, user, {'hn': hs['name'], 'an': as_['name'], 'hid': h_id, 'aid': a_id, 'lg': lc, 'conf': conf, 'dqi': dqi})
-
                     st.markdown(f"<div class='narrative-box'>{res['narrative']}</div>", unsafe_allow_html=True); st.write("")
                     c_h, c_d, c_a = st.columns(3)
                     c_h.markdown(f"<div class='highlight-box'><div class='metric-label'>{hs['name']}</div><div class='big-metric'>%{res['probs']['1']:.1f}</div></div>", unsafe_allow_html=True)
@@ -288,14 +311,15 @@ def main():
             else: st.info("Veri yok.")
 
     elif is_admin and nav == t["nav_admin"]:
-        st.header("Admin"); at1, at2 = st.tabs(["Batch", "Validation"])
+        st.header("Admin Paneli"); at1, at2 = st.tabs(["Otomasyon", "Manuel Giriş"])
         with at1:
-            lb = st.slider("Gün", 0, 10, 3)
-            if st.button("Taramayı Başlat"):
-                api = st.secrets.get("FOOTBALL_API_KEY"); dm = DataManager(api); matches = []
-                for code in CONSTANTS["LEAGUES"].values(): _, f, _ = dm.fetch(code); matches.extend(f['matches']) if f else None
-                target = [m for m in matches if m['status'] in ['SCHEDULED','TIMED','IN_PLAY'] or (m['status']=='FINISHED' and datetime.strptime(m['utcDate'],"%Y-%m-%dT%H:%M:%SZ") > (datetime.utcnow()-timedelta(days=lb)))]
-                st.success(f"{len(target)} maç bulundu.")
+            st.subheader("🤖 Otomatik Maç Sonuçları")
+            st.info("Bu buton; geçmişte analiz ettiğin ama sonucu girilmemiş maçları API'den tarar, bitenleri bulur ve veritabanına kaydeder.")
+            if st.button("🔄 OTOMATİK SENKRONİZASYON (API)"):
+                with st.spinner("Tüm ligler taranıyor..."):
+                    c = auto_sync_results()
+                    if c > 0: st.success(f"{c} maç güncellendi ve performans metrikleri hesaplandı!")
+                    else: st.warning("Güncellenecek yeni maç bulunamadı.")
         with at2:
             if db:
                 pend = list(db.collection("predictions").where("actual_result", "==", None).limit(500).stream()); pend.sort(key=lambda x: x.to_dict().get('match_date', '0000'))
@@ -304,7 +328,7 @@ def main():
                     with st.form("val"):
                         sid = st.selectbox("Maç Seç", list(opts.keys()), format_func=lambda x: opts[x])
                         c1, c2 = st.columns(2); hg = c1.number_input("Ev Gol", 0); ag = c2.number_input("Dep Gol", 0); nt = st.text_area("Not")
-                        if st.form_submit_button("Sonucu Kaydet"): update_result_db(sid, hg, ag, nt); st.success("Kaydedildi"); time.sleep(1); st.rerun()
+                        if st.form_submit_button("Manuel Kaydet"): update_result_db(sid, hg, ag, nt); st.success("Kaydedildi"); time.sleep(1); st.rerun()
 
 if __name__ == "__main__":
     main()
