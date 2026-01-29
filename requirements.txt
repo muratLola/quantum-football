@@ -6,4 +6,3 @@ firebase-admin
 fpdf
 requests
 scipy
-google-generativeai
