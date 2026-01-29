@@ -12,32 +12,33 @@ import hashlib
 import firebase_admin
 from firebase_admin import credentials, firestore
 from scipy.stats import poisson
+import functools
 
 # --- 0. SİSTEM VE KONFIGURASYON ---
-MODEL_VERSION = "v28.0-Singularity"
+MODEL_VERSION = "v29.0-TheMonolith"
 
 st.set_page_config(page_title="QUANTUM FOOTBALL", page_icon="⚽", layout="wide")
 np.random.seed(42)
 
-# CSS (Profesyonel Dashboard)
+# CSS (Ultimate Dark Mode)
 st.markdown("""
     <style>
-        .stApp {background-color: #0b0f19; color: #e0e0e0;}
-        .big-metric {font-size: 32px; font-weight: bold; color: #00ff88; font-family: 'Courier New', monospace;}
-        .metric-label {font-size: 14px; color: #aaaaaa; text-transform: uppercase; letter-spacing: 1px;}
-        .highlight-box {background: rgba(0, 255, 136, 0.05); padding: 20px; border-radius: 12px; border: 1px solid rgba(0, 255, 136, 0.2);}
-        .narrative-box {background: rgba(0, 200, 255, 0.08); padding: 15px; border-radius: 8px; border-left: 4px solid #00c8ff; font-style: italic; font-family: 'Georgia', serif;}
-        .stButton>button {background-color: #00ff88; color: #000; font-weight: 900; border: none; width: 100%; padding: 12px; transition: all 0.3s; text-transform: uppercase;}
-        .stButton>button:hover {background-color: #00cc6a; color: #fff; transform: scale(1.02); box-shadow: 0 0 15px rgba(0, 255, 136, 0.4);}
-        .success-log {color: #00ff88; font-size: 0.85rem; font-family: monospace; border-left: 2px solid #00ff88; padding-left: 10px; margin-bottom: 5px;}
-        .error-log {color: #ff4444; font-size: 0.85rem; font-family: monospace; border-left: 2px solid #ff4444; padding-left: 10px; margin-bottom: 5px;}
+        .stApp {background-color: #050505; color: #e0e0e0;}
+        .big-metric {font-size: 36px; font-weight: 800; color: #00ff88; font-family: 'Helvetica Neue', sans-serif;}
+        .metric-label {font-size: 12px; color: #888; letter-spacing: 2px; text-transform: uppercase;}
+        .highlight-box {background: linear-gradient(145deg, rgba(0,255,136,0.05), rgba(0,0,0,0)); padding: 20px; border-radius: 15px; border: 1px solid rgba(0, 255, 136, 0.15);}
+        .narrative-box {background: rgba(10, 20, 40, 0.8); padding: 20px; border-radius: 10px; border-left: 3px solid #00c8ff; font-family: 'Calibri', sans-serif; font-size: 1.1rem;}
+        .stButton>button {background: linear-gradient(90deg, #00ff88, #00cc6a); color: #000; font-weight: 900; border: none; width: 100%; padding: 14px; text-transform: uppercase; border-radius: 8px;}
+        .stButton>button:hover {transform: translateY(-2px); box-shadow: 0 5px 20px rgba(0, 255, 136, 0.3);}
+        .success-log {color: #00ff88; font-family: monospace; font-size: 0.8rem;}
+        .error-log {color: #ff5555; font-family: monospace; font-size: 0.8rem;}
     </style>
 """, unsafe_allow_html=True)
 
 # Dil
 TRANS = {
-    "EN": {"nav_sim": "🚀 Simulation Lab", "nav_perf": "📈 Model Performance", "nav_admin": "🗃️ Admin Core", "btn_sim": "⚡ INITIALIZE QUANTUM ENGINE", "scenarios": "📊 Probabilistic Scenarios"},
-    "TR": {"nav_sim": "🚀 Simülasyon Laboratuvarı", "nav_perf": "📈 Performans & Kalibrasyon", "nav_admin": "🗃️ Yönetim Çekirdeği", "btn_sim": "⚡ KUANTUM MOTORUNU BAŞLAT", "scenarios": "📊 Olasılık Senaryoları"}
+    "EN": {"nav_sim": "🚀 Analysis Lab", "nav_perf": "📈 Integrity Check", "nav_admin": "🗃️ System Core", "btn_sim": "⚡ EXECUTE PREDICTION MODEL", "scenarios": "📊 Probability Matrices"},
+    "TR": {"nav_sim": "🚀 Analiz Laboratuvarı", "nav_perf": "📈 Doğruluk Kontrolü", "nav_admin": "🗃️ Sistem Çekirdeği", "btn_sim": "⚡ TAHMİN MODELİNİ ÇALIŞTIR", "scenarios": "📊 Olasılık Matrisleri"}
 }
 
 # Güvenlik & API
@@ -51,7 +52,7 @@ if not firebase_admin._apps:
         if "firebase" in st.secrets:
             cred = credentials.Certificate(dict(st.secrets["firebase"]))
             firebase_admin.initialize_app(cred)
-    except Exception as e: st.error(f"Veritabanı Bağlantı Hatası: {e}")
+    except Exception as e: st.error(f"FATAL: Database Connection Failed - {e}")
 try: db = firestore.client()
 except: db = None
 
@@ -60,55 +61,74 @@ CONSTANTS = {
     "TACTICS": {"Dengeli": (1.0, 1.0), "Hücum": (1.25, 1.15), "Savunma": (0.65, 0.60), "Kontra": (0.95, 0.85)},
     "LEAGUES": {"Şampiyonlar Ligi": "CL", "Premier League (EN)": "PL", "La Liga (ES)": "PD", "Bundesliga (DE)": "BL1", "Serie A (IT)": "SA", "Ligue 1 (FR)": "FL1", "Eredivisie (NL)": "DED", "Primeira Liga (PT)": "PPL", "Süper Lig (TR)": "TR1"}
 }
-LEAGUE_PROFILES = {"PL": {"pace": 1.15}, "TR1": {"pace": 1.08}, "BL1": {"pace": 1.25}, "SA": {"pace": 0.98}, "DEFAULT": {"pace": 1.0}}
+
+# Gelişmiş Lig Profilleri (Pace + Home Advantage Factor)
+LEAGUE_PROFILES = {
+    "PL": {"pace": 1.15, "ha": 1.12}, # İngiltere: Hızlı, Ev sahibi etkisi normal
+    "TR1": {"pace": 1.08, "ha": 1.25}, # Türkiye: Orta hız, Ev sahibi etkisi ÇOK YÜKSEK
+    "BL1": {"pace": 1.25, "ha": 1.15}, # Almanya: Çok hızlı (bol gol)
+    "SA": {"pace": 0.98, "ha": 1.10},  # İtalya: Taktiksel
+    "DEFAULT": {"pace": 1.0, "ha": 1.10}
+}
+
+# --- DECORATOR: API RETRY LOGIC (Anti-Crash) ---
+def retry_with_backoff(retries=3, backoff_in_seconds=1):
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            x = 0
+            while True:
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    if x == retries:
+                        st.warning(f"Bağlantı hatası (Son deneme başarısız): {e}")
+                        return {}, {}, {} # Boş dönüş
+                    sleep = (backoff_in_seconds * 2 ** x + np.random.uniform(0, 1))
+                    time.sleep(sleep)
+                    x += 1
+        return wrapper
+    return decorator
 
 # --- 1. ENGINE: MATEMATİKSEL ÇEKİRDEK ---
 class AnalyticsEngine:
     def __init__(self, elo_manager=None): self.elo_manager = elo_manager
 
-    # Gemini Cache (Maliyet ve Hız İçin Kritik)
     @st.cache_data(ttl=3600, show_spinner=False)
     def get_cached_ai_narrative(_self, h_name, a_name, probs, entropy, xg_h, xg_a, form_h, form_a):
-        static = f"⚠️ **Yüksek Varyans:** {h_name} vs {a_name} maçında belirsizlik yüksek (Entropi: {entropy:.2f})." if entropy > 1.55 else f"✅ **İstatistiksel Avantaj:** {h_name if xg_h > xg_a else a_name} (Güven: %{max(probs.values()):.1f})."
+        static = f"⚠️ **Yüksek Belirsizlik:** {h_name} vs {a_name} (Entropi: {entropy:.2f}). Sürpriz ihtimali yüksek." if entropy > 1.58 else f"✅ **Model Favorisi:** {h_name if xg_h > xg_a else a_name} (Güven: %{max(probs.values()):.1f})."
         
         if GEMINI_API_KEY:
             try:
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
                 headers = {'Content-Type': 'application/json'}
                 prompt_text = (
-                    f"Sen dünyanın en iyi futbol veri bilimcisisin. Asla bahis terimi kullanma. "
-                    f"Maç: {h_name} (Form Endeksi: {form_h:.2f}) vs {a_name} (Form Endeksi: {form_a:.2f}). "
-                    f"Modelin xG Tahmini: {xg_h:.2f} - {xg_a:.2f}. "
-                    f"Kazanma Olasılıkları: Ev %{probs['1']:.1f}, Beraberlik %{probs['X']:.1f}, Deplasman %{probs['2']:.1f}. "
-                    f"Kaos/Entropi: {entropy:.2f} (Yüksek olması sürprize açık demek). "
-                    f"Bu veriler ışığında taktiksel ve istatistiksel bir öngörü paragrafı yaz (Max 2 cümle)."
+                    f"Sen elit bir futbol analistisin. Bahis terimi YASAK. "
+                    f"Maç: {h_name} (Form: {form_h:.2f}) - {a_name} (Form: {form_a:.2f}). "
+                    f"xG Beklentisi: {xg_h:.2f} - {xg_a:.2f}. "
+                    f"Kazanma İhtimalleri: Ev %{probs['1']:.1f}, Beraberlik %{probs['X']:.1f}, Dep %{probs['2']:.1f}. "
+                    f"Kaos Endeksi: {entropy:.2f}. "
+                    f"Verileri sentezle ve maçın taktiksel hikayesini 2 cümlede, profesyonelce anlat."
                 )
                 payload = {"contents": [{"parts": [{"text": prompt_text}]}]}
-                response = requests.post(url, headers=headers, json=payload, timeout=8)
-                
+                response = requests.post(url, headers=headers, json=payload, timeout=9)
                 if response.status_code == 200:
-                    ai_text = response.json()['candidates'][0]['content']['parts'][0]['text']
-                    return f"🤖 **Gemini Neural Insight:** {ai_text}"
-                else:
-                    return f"{static} (AI Status: {response.status_code})"
-            except Exception:
-                return static
+                    return f"🤖 **Gemini AI:** {response.json()['candidates'][0]['content']['parts'][0]['text']}"
+            except: pass
         return static
 
-    def dixon_coles_tau(self, x, y, lambda_h, lambda_a, rho):
-        """
-        Akademik Dixon-Coles Tau Fonksiyonu (Düzeltilmiş)
-        Düşük skorlu maçlardaki (0-0, 1-0, 0-1, 1-1) bağımlılığı modeller.
-        """
-        if x == 0 and y == 0: return 1 - (lambda_h * lambda_a * rho)
-        elif x == 0 and y == 1: return 1 + (lambda_h * rho)
-        elif x == 1 and y == 0: return 1 + (lambda_a * rho)
-        elif x == 1 and y == 1: return 1 - rho
-        else: return 1.0
+    def dixon_coles_tau(self, x, y, lh, la, rho):
+        if x==0 and y==0: return 1 - (lh*la*rho)
+        elif x==0 and y==1: return 1 + (lh*rho)
+        elif x==1 and y==0: return 1 + (la*rho)
+        elif x==1 and y==1: return 1 - rho
+        return 1.0
 
-    def calculate_rho(self, xg_sum):
-        # Toplam gol beklentisi düştükçe, 0-0 ihtimali üzerindeki düzeltme katsayısı artmalı
-        return -0.13 if xg_sum < 2.5 else -0.1
+    def get_dynamic_rho(self, total_xg):
+        # Düşük gollü maçlarda beraberlik baskısı (Rho) daha yüksek olmalı
+        if total_xg < 2.0: return -0.16
+        if total_xg < 2.8: return -0.12
+        return -0.09
 
     def run_simulation(self, h_stats, a_stats, lg_stats, params, h_id, a_id, league_code, roster_factor, high_precision=False):
         l_prof = LEAGUE_PROFILES.get(league_code, LEAGUE_PROFILES["DEFAULT"])
@@ -117,38 +137,29 @@ class AnalyticsEngine:
         h_played = max(1, h_stats.get('home_played', h_stats.get('played', 1)/2))
         a_played = max(1, a_stats.get('away_played', a_stats.get('played', 1)/2))
         
-        h_att = h_stats.get('home_gf', h_stats.get('gf', 0)/2) / h_played
-        h_def = h_stats.get('home_ga', h_stats.get('ga', 0)/2) / h_played
-        a_att = a_stats.get('away_gf', a_stats.get('gf', 0)/2) / a_played
-        a_def = a_stats.get('away_ga', a_stats.get('ga', 0)/2) / a_played
+        h_att = h_stats.get('home_gf', 0) / h_played / lg_stats.get('home_avg_goals', 1.5)
+        h_def = h_stats.get('home_ga', 0) / h_played / lg_stats.get('away_avg_goals', 1.2)
+        a_att = a_stats.get('away_gf', 0) / a_played / lg_stats.get('away_avg_goals', 1.2)
+        a_def = a_stats.get('away_ga', 0) / a_played / lg_stats.get('home_avg_goals', 1.5)
         
-        lg_h_att = lg_stats.get('home_avg_goals', 1.5)
-        lg_a_att = lg_stats.get('away_avg_goals', 1.2)
-        
-        has = h_att / lg_h_att; adw = a_def / lg_h_att
-        aas = a_att / lg_a_att; hdw = h_def / lg_a_att
-        
-        # 2. FORM (EWMA - Exponential Weighted Moving Average Benzeri)
-        # Son maçlara daha çok ağırlık veren yapı
-        h_form = (h_stats.get('form_home', 1.0) * 0.7) + (h_stats.get('form_overall', 1.0) * 0.3)
-        a_form = (a_stats.get('form_away', 1.0) * 0.7) + (a_stats.get('form_overall', 1.0) * 0.3)
-        form_impact = (h_form - a_form) * 0.20 # Katsayı artırıldı
-        
-        # 3. ELO (Logistic Impact - Lineer Yerine)
+        # 2. EWMA FORM (Üstel Ağırlıklı)
+        h_form = (h_stats.get('form_home', 1.0)*0.65 + h_stats.get('form_overall', 1.0)*0.35)
+        a_form = (a_stats.get('form_away', 1.0)*0.65 + a_stats.get('form_overall', 1.0)*0.35)
+        form_diff = (h_form - a_form) * 0.22 
+
+        # 3. ELO & HOME ADVANTAGE
         elo_h = self.elo_manager.get_elo(h_id, h_stats['name']) if self.elo_manager else 1500
         elo_a = self.elo_manager.get_elo(a_id, a_stats['name']) if self.elo_manager else 1500
         elo_diff = elo_h - elo_a
-        # Logistic fonksiyon: Fark 400 ise 10 kat, 0 ise 1 kat.
-        elo_multiplier_h = 1 + (1 / (1 + 10 ** (-elo_diff / 400)) - 0.5) * 0.4
-        elo_multiplier_a = 1 + (1 / (1 + 10 ** (elo_diff / 400)) - 0.5) * 0.4
-
-        # 4. xG HESAPLAMA (Master Formula)
-        xg_h = has * adw * lg_h_att * l_prof["pace"] * roster_factor[0] * elo_multiplier_h * (1 + form_impact)
-        xg_a = aas * hdw * lg_a_att * l_prof["pace"] * roster_factor[1] * elo_multiplier_a * (1 - form_impact)
         
-        # Taktiksel Çarpanlar
-        xg_h *= params['t_h'][0] * params['t_a'][1]
-        xg_a *= params['t_a'][0] * params['t_h'][1]
+        # Logistic Elo scaling
+        elo_prob_h = 1 / (1 + 10 ** (-elo_diff / 400))
+        elo_mult = 1 + (elo_prob_h - 0.5) * 0.5 # Scale factor
+
+        # 4. xG MASTER FORMULA
+        # Base * LeaguePace * Roster * Form * Elo * Tactics * HOME_ADVANTAGE
+        xg_h = h_att * a_def * lg_stats.get('home_avg_goals', 1.5) * l_prof["pace"] * roster_factor[0] * elo_mult * (1+form_diff) * params['t_h'][0] * params['t_a'][1] * l_prof["ha"]
+        xg_a = a_att * h_def * lg_stats.get('away_avg_goals', 1.2) * l_prof["pace"] * roster_factor[1] * (2-elo_mult) * (1-form_diff) * params['t_a'][0] * params['t_h'][1]
         
         # 5. POISSON & DIXON-COLES
         limit = 10
@@ -156,116 +167,82 @@ class AnalyticsEngine:
         a_probs = poisson.pmf(np.arange(limit), xg_a)
         matrix = np.outer(h_probs, a_probs)
         
-        rho = self.calculate_rho(xg_h + xg_a)
-        # Dixon-Coles Düzeltmesi (Sadece 0 ve 1 skorları için)
+        rho = self.get_dynamic_rho(xg_h + xg_a)
         for i in range(2):
             for j in range(2):
-                tau_val = self.dixon_coles_tau(i, j, xg_h, xg_a, rho)
-                matrix[i, j] *= tau_val
+                matrix[i,j] *= self.dixon_coles_tau(i, j, xg_h, xg_a, rho)
         
-        # Normalizasyon ve Güvenlik
         matrix[matrix < 0] = 0
-        sum_probs = matrix.sum()
-        if sum_probs > 0: matrix /= sum_probs
-        else: matrix[0,0] = 1.0
+        s = matrix.sum(); matrix /= s if s > 0 else 1
         
-        # 6. SONUÇ ÇIKARIMI
         p_home = np.sum(np.tril(matrix, -1)) * 100
         p_draw = np.sum(np.diag(matrix)) * 100
         p_away = np.sum(np.triu(matrix, 1)) * 100
         o25 = np.sum(matrix[np.indices((limit,limit)).sum(0)>2.5]) * 100
         btts = (1 - matrix[0,:].sum() - matrix[:,0].sum() + matrix[0,0]) * 100
         
-        # 7. MONTE CARLO (High Precision Override)
+        # 6. MONTE CARLO (High Precision)
         if high_precision:
-            sims = 100000 # 100k Simülasyon
-            sim_h = np.random.poisson(xg_h, sims)
-            sim_a = np.random.poisson(xg_a, sims)
-            p_home = np.mean(sim_h > sim_a) * 100
-            p_draw = np.mean(sim_h == sim_a) * 100
-            p_away = np.mean(sim_h < sim_a) * 100
-            o25 = np.mean((sim_h + sim_a) > 2.5) * 100
-            btts = np.mean((sim_h > 0) & (sim_a > 0)) * 100
-        
-        # 8. SKOR TAHMİNİ (Akıllı Beraberlik Seçimi)
-        max_idx = np.unravel_index(np.argmax(matrix), matrix.shape)
-        if max_idx[0] == max_idx[1]: # Eğer model 0-0 veya 1-1 arasında kaldıysa
-             draw_probs = np.diag(matrix)
-             best_draw = np.argmax(draw_probs)
-             score_str = f"{best_draw}-{best_draw}"
-        else:
-             score_str = f"{max_idx[0]}-{max_idx[1]}"
+            sims = 100000
+            sh = np.random.poisson(xg_h, sims); sa = np.random.poisson(xg_a, sims)
+            p_home = np.mean(sh > sa)*100; p_draw = np.mean(sh == sa)*100; p_away = np.mean(sh < sa)*100
+            o25 = np.mean((sh+sa)>2.5)*100; btts = np.mean((sh>0)&(sa>0))*100
 
-        probs_dict = {"1": p_home, "X": p_draw, "2": p_away}
-        entropy = -np.sum((np.array(list(probs_dict.values()))/100) * np.log2((np.array(list(probs_dict.values()))/100) + 1e-9))
-        
-        # Gemini'yi Çağır (Cache'li)
-        narrative = self.get_cached_ai_narrative(h_stats['name'], a_stats['name'], probs_dict, entropy, xg_h, xg_a, h_form, a_form)
+        # 7. SKOR TAHMİNİ (Smart Draw)
+        midx = np.unravel_index(np.argmax(matrix), matrix.shape)
+        score_str = f"{midx[0]}-{midx[1]}"
+        if midx[0] == midx[1]: 
+            best_draw = np.argmax(np.diag(matrix))
+            score_str = f"{best_draw}-{best_draw}"
+
+        probs = {"1": p_home, "X": p_draw, "2": p_away}
+        entropy = -np.sum((np.array(list(probs.values()))/100) * np.log2((np.array(list(probs.values()))/100) + 1e-9))
+        narrative = self.get_cached_ai_narrative(h_stats['name'], a_stats['name'], probs, entropy, xg_h, xg_a, h_form, a_form)
         ci_h = poisson.interval(0.90, xg_h); ci_a = poisson.interval(0.90, xg_a)
         
-        return {
-            "probs": {"1": p_home, "X": p_draw, "2": p_away, "o25": o25, "btts": btts},
-            "xg": (xg_h, xg_a),
-            "elo": (elo_h, elo_a),
-            "score": score_str,
-            "matrix": matrix,
-            "vectors": (has, hdw, aas, adw),
-            "narrative": narrative,
-            "entropy": entropy,
-            "ci": (ci_h, ci_a)
-        }
+        return {"probs": {"1": p_home, "X": p_draw, "2": p_away, "o25": o25, "btts": btts}, "xg": (xg_h, xg_a), "elo": (elo_h, elo_a), "score": score_str, "matrix": matrix, "vectors": (has, hdw, aas, adw), "narrative": narrative, "entropy": entropy, "ci": (ci_h, ci_a)}
 
-# --- 2. DATA: VERİ YÖNETİMİ ---
+# --- 2. DATA ---
 class DataManager:
     def __init__(self, key): self.headers = {"X-Auth-Token": key}
     
-    @st.cache_data(ttl=1800) # 30 dk cache
+    @retry_with_backoff(retries=3, backoff_in_seconds=2)
+    @st.cache_data(ttl=1800)
     def fetch(_self, league):
-        try:
-            r1 = requests.get(f"{CONSTANTS['API_URL']}/competitions/{league}/standings", headers=_self.headers).json()
-            r2 = requests.get(f"{CONSTANTS['API_URL']}/competitions/{league}/matches", headers=_self.headers).json()
-            
-            if 'errorCode' in r1 or 'errorCode' in r2:
-                st.error(f"API Hatası: {r1.get('errorCode', 'Bilinmeyen Hata')}")
-                return {}, {}, {}
-
-            lg_stats = {"home_avg_goals": 1.5, "away_avg_goals": 1.2}; team_stats = {}
-            if 'standings' in r1:
-                h_goals=0; h_games=0; a_goals=0; a_games=0
-                for group in r1['standings']:
-                    for t in group['table']:
-                        tid = t['team']['id']
-                        if tid not in team_stats: team_stats[tid] = {'name': t['team']['name'], 'crest': t['team']['crest']}
-                        g_type = group['type']
-                        if g_type == 'TOTAL': team_stats[tid].update({'gf': t['goalsFor'], 'ga': t['goalsAgainst'], 'played': t['playedGames']})
-                        elif g_type == 'HOME': team_stats[tid].update({'home_gf': t['goalsFor'], 'home_ga': t['goalsAgainst'], 'home_played': t['playedGames']}); h_goals+=t['goalsFor']; h_games+=t['playedGames']
-                        elif g_type == 'AWAY': team_stats[tid].update({'away_gf': t['goalsFor'], 'away_ga': t['goalsAgainst'], 'away_played': t['playedGames']}); a_goals+=t['goalsFor']; a_games+=t['playedGames']
-                if h_games > 0: lg_stats['home_avg_goals'] = h_goals / h_games
-                if a_games > 0: lg_stats['away_avg_goals'] = a_goals / a_games
-            return team_stats, r2, lg_stats
-        except Exception as e:
-            st.error(f"Veri Hatası: {e}")
-            return {}, {}, {}
+        r1 = requests.get(f"{CONSTANTS['API_URL']}/competitions/{league}/standings", headers=_self.headers).json()
+        r2 = requests.get(f"{CONSTANTS['API_URL']}/competitions/{league}/matches", headers=_self.headers).json()
+        if 'errorCode' in r1: raise Exception(f"API Error: {r1['errorCode']}")
+        
+        lg_stats = {"home_avg_goals": 1.5, "away_avg_goals": 1.2}; team_stats = {}
+        if 'standings' in r1:
+            h_g, h_p, a_g, a_p = 0,0,0,0
+            for group in r1['standings']:
+                for t in group['table']:
+                    tid = t['team']['id']
+                    if tid not in team_stats: team_stats[tid] = {'name': t['team']['name'], 'crest': t['team']['crest']}
+                    g_type = group['type']
+                    if g_type == 'TOTAL': team_stats[tid].update({'gf': t['goalsFor'], 'ga': t['goalsAgainst'], 'played': t['playedGames']})
+                    elif g_type == 'HOME': 
+                        team_stats[tid].update({'home_gf': t['goalsFor'], 'home_ga': t['goalsAgainst'], 'home_played': t['playedGames']})
+                        h_g+=t['goalsFor']; h_p+=t['playedGames']
+                    elif g_type == 'AWAY': 
+                        team_stats[tid].update({'away_gf': t['goalsFor'], 'away_ga': t['goalsAgainst'], 'away_played': t['playedGames']})
+                        a_g+=t['goalsFor']; a_p+=t['playedGames']
+            if h_p > 0: lg_stats = {'home_avg_goals': h_g/h_p, 'away_avg_goals': a_g/a_p}
+        return team_stats, r2, lg_stats
 
     def get_form(self, matches, team_id, filter_type='ALL'):
-        # Gelişmiş Form Hesabı (Tarih Sıralı)
         played = [m for m in matches.get('matches', []) if m['status']=='FINISHED' and (m['homeTeam']['id']==team_id or m['awayTeam']['id']==team_id)]
         if filter_type == 'HOME': played = [m for m in played if m['homeTeam']['id']==team_id]
         if filter_type == 'AWAY': played = [m for m in played if m['awayTeam']['id']==team_id]
+        played.sort(key=lambda x: x['utcDate'], reverse=True)
         
-        played.sort(key=lambda x: x['utcDate'], reverse=True) # En yeni en üstte
-        w_sum, tot_w = 0, 0
-        
-        # Son 5 maç, üstel ağırlık (En yeni maç en değerli)
-        weights = [1.0, 0.85, 0.70, 0.55, 0.40]
-        
+        # EWMA Weights (Son maça yüksek önem)
+        weights = [1.0, 0.8, 0.6, 0.4, 0.2]; w_sum = 0; tot = 0
         for i, m in enumerate(played[:5]):
             pts = 3 if (m['score']['winner']=='HOME_TEAM' and m['homeTeam']['id']==team_id) or (m['score']['winner']=='AWAY_TEAM' and m['awayTeam']['id']==team_id) else 1 if m['score']['winner']=='DRAW' else 0
-            w = weights[i]
-            w_sum += pts * w
-            tot_w += w
-            
-        return (0.5 + (w_sum/tot_w/3.0)) if tot_w > 0 else 1.0
+            w_sum += pts * weights[i]; tot += weights[i]
+        return (0.5 + (w_sum/tot/3.0)) if tot > 0 else 1.0
 
 # --- 3. DB & SYNC ---
 class EloManager:
@@ -276,8 +253,8 @@ class EloManager:
         return doc.to_dict().get("elo", 1500) if doc.exists else 1500
     def update(self, hid, hnm, aid, anm, hg, ag):
         eh = self.get_elo(hid, hnm); ea = self.get_elo(aid, anm)
-        exp = 1/(1+10**((ea-eh)/400)); act = 1.0 if hg>ag else 0.0 if hg<ag else 0.5
-        k = CONSTANTS["ELO_K"] * (1.5 if abs(hg-ag)>2 else 1.0); d = k*(act-exp)
+        ex = 1/(1+10**((ea-eh)/400)); act = 1.0 if hg>ag else 0.0 if hg<ag else 0.5
+        k = CONSTANTS["ELO_K"] * (1.5 if abs(hg-ag)>2 else 1.0); d = k*(act-ex)
         self.db.collection("ratings").document(str(hid)).set({"name":hnm, "elo":round(eh+d)}, merge=True)
         self.db.collection("ratings").document(str(aid)).set({"name":anm, "elo":round(ea-d)}, merge=True)
 
@@ -285,50 +262,46 @@ def update_result_db(doc_id, hg, ag, notes):
     if not db: return False
     try:
         ref = db.collection("predictions").document(str(doc_id)); d = ref.get().to_dict()
-        res = "1" if int(hg) > int(ag) else "2" if int(ag) > int(hg) else "X"
-        p_vec = np.array([d["home_prob"], d["draw_prob"], d["away_prob"]]) / 100; o_vec = np.zeros(3); o_vec[0 if res=="1" else 1 if res=="X" else 2] = 1
-        brier = np.sum((p_vec - o_vec)**2)
-        rps = (p_vec[0]-o_vec[0])**2 + (p_vec[0]+p_vec[1]-o_vec[0]-o_vec[1])**2 
-        if "home_id" in d and "away_id" in d: 
-            EloManager(db).update(d["home_id"], "", d["away_id"], "", int(hg), int(ag))
+        res = "1" if int(hg)>int(ag) else "2" if int(ag)>int(hg) else "X"
+        p = np.array([d["home_prob"], d["draw_prob"], d["away_prob"]])/100
+        o = np.zeros(3); o[0 if res=="1" else 1 if res=="X" else 2] = 1
+        brier = np.sum((p-o)**2); rps = (p[0]-o[0])**2 + (p[0]+p[1]-o[0]-o[1])**2 
+        if "home_id" in d and "away_id" in d: EloManager(db).update(d["home_id"], "", d["away_id"], "", int(hg), int(ag))
         ref.update({"actual_result": res, "actual_score": f"{hg}-{ag}", "brier_score": float(brier), "rps_score": float(rps), "validation_status": "VALIDATED", "admin_notes": notes})
         return True
-    except Exception as e: st.error(f"DB Update Error: {e}"); return False
+    except: return False
 
 def auto_sync_results():
     if not db or not FOOTBALL_API_KEY: return 0
-    headers = {"X-Auth-Token": FOOTBALL_API_KEY}
-    count = 0
-    pending_docs = list(db.collection("predictions").where("actual_result", "==", None).stream())
-    if not pending_docs: st.info("Senkronize edilecek eksik maç yok."); return 0
+    headers = {"X-Auth-Token": FOOTBALL_API_KEY}; count = 0
+    pending = list(db.collection("predictions").where("actual_result", "==", None).stream())
+    if not pending: st.info("Senkronize edilecek maç yok."); return 0
     
-    st.info(f"{len(pending_docs)} maç kontrol ediliyor (Smart Sync)...")
+    date_from = (datetime.utcnow() - timedelta(days=14)).strftime("%Y-%m-%d")
+    leagues = set([d.to_dict().get("league") for d in pending])
+    st.info(f"{len(pending)} açık tahmin taranıyor ({len(leagues)} lig)...")
     
-    # Tarih filtresi (Son 10 gün) - API yükünü azaltmak için
-    date_from = (datetime.utcnow() - timedelta(days=10)).strftime("%Y-%m-%d")
-    target_leagues = set([d.to_dict().get("league") for d in pending_docs])
-    
-    for code in target_leagues:
+    for code in leagues:
         try:
-            time.sleep(6) # Anti-Ban Delay
+            time.sleep(6) # Anti-Ban
             url = f"{CONSTANTS['API_URL']}/competitions/{code}/matches?status=FINISHED&dateFrom={date_from}"
             r = requests.get(url, headers=headers).json()
             if 'matches' not in r: continue
-            
-            finished_matches = {str(m['id']): m for m in r['matches']}
-            for doc in pending_docs:
+            fin = {str(m['id']): m for m in r['matches']}
+            for doc in pending:
                 d = doc.to_dict(); mid = str(doc.id)
-                if d.get("league") == code and mid in finished_matches:
-                    m = finished_matches[mid]
-                    update_result_db(mid, m['score']['fullTime']['home'], m['score']['fullTime']['away'], "Smart-Sync v28")
-                    count += 1
-                    st.markdown(f"<div class='success-log'>✅ {d['match_name']}: {m['score']['fullTime']['home']}-{m['score']['fullTime']['away']}</div>", unsafe_allow_html=True)
-        except Exception as e: st.markdown(f"<div class='error-log'>⚠️ {code} Sync Hatası: {e}</div>", unsafe_allow_html=True)
+                if d.get("league") == code and mid in fin:
+                    m = fin[mid]; hg=m['score']['fullTime']['home']; ag=m['score']['fullTime']['away']
+                    if hg is not None:
+                        update_result_db(mid, hg, ag, "AutoSync v29")
+                        count += 1
+                        st.markdown(f"<div class='success-log'>✅ {d['match_name']}: {hg}-{ag}</div>", unsafe_allow_html=True)
+        except Exception as e: st.markdown(f"<div class='error-log'>⚠️ Sync Error: {e}</div>", unsafe_allow_html=True)
     return count
 
 def save_pred_db(m, probs, params, user, meta):
     if not db: return
-    p1, p2, p3 = float(probs[0]), float(probs[1]), float(probs[2])
+    p1,p2,p3 = float(probs[0]), float(probs[1]), float(probs[2])
     doc = db.collection("predictions").document(str(m['id']))
     if not doc.get().exists:
         doc.set({
@@ -342,45 +315,40 @@ def save_pred_db(m, probs, params, user, meta):
 
 # --- 4. VISUALS ---
 def create_score_heatmap(matrix, h_name, a_name):
-    return go.Figure(data=go.Heatmap(z=matrix[:6, :6], x=[str(i) for i in range(6)], y=[str(i) for i in range(6)], colorscale='Viridis', showscale=False, texttemplate="%{z:.1%}")).update_layout(title=f"{h_name} vs {a_name} Score Probability", xaxis_title=a_name, yaxis_title=h_name, width=400, height=400, font=dict(color="white"), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+    return go.Figure(data=go.Heatmap(z=matrix[:6, :6], x=[str(i) for i in range(6)], y=[str(i) for i in range(6)], colorscale='Viridis', showscale=False, texttemplate="%{z:.1%}")).update_layout(title=f"Score Probabilities: {h_name} vs {a_name}", xaxis_title=a_name, yaxis_title=h_name, width=400, height=400, font=dict(color="white"), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
 
 def create_radar(hs, as_, vectors):
-    categories = ['Attack', 'Defense', 'Form (EWMA)', 'Elo Index']
+    cats = ['Attack', 'Defense', 'Momentum (Form)', 'Elo Rating']
     h_v = [min(100, vectors[0]*50), min(100, (2-vectors[1])*50), hs.get('form_home', 1)*80, 85]
     a_v = [min(100, vectors[2]*50), min(100, (2-vectors[3])*50), as_.get('form_away', 1)*80, 80]
     fig = go.Figure()
-    fig.add_trace(go.Scatterpolar(r=h_v, theta=categories, fill='toself', name=hs['name'], line_color='#00ff88'))
-    fig.add_trace(go.Scatterpolar(r=a_v, theta=categories, fill='toself', name=as_['name'], line_color='#ff4444'))
+    fig.add_trace(go.Scatterpolar(r=h_v, theta=cats, fill='toself', name=hs['name'], line_color='#00ff88'))
+    fig.add_trace(go.Scatterpolar(r=a_v, theta=cats, fill='toself', name=as_['name'], line_color='#ff4444'))
     fig.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 100])), showlegend=True, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color="white"), height=350)
     return fig
 
 # --- 5. MAIN ---
 def main():
-    q = st.query_params; user = q.get("user_email", "Guest"); is_admin = False
+    if 'admin' not in st.session_state: st.session_state.admin = False
     
-    # Session State Init
-    if 'admin_logged_in' not in st.session_state: st.session_state.admin_logged_in = False
-
     with st.sidebar:
-        st.header("🌐 Dil / Language"); lang = "TR" if "TR" in st.selectbox("Dil", ["Türkçe (TR)", "English (EN)"]) else "EN"; t = TRANS[lang]
-        st.divider(); nav = st.radio("Menu", [t["nav_sim"], t["nav_perf"], t["nav_admin"]])
+        st.header("🌐 Language"); lang = "TR" if "TR" in st.selectbox("Select", ["Türkçe (TR)", "English (EN)"]) else "EN"; t = TRANS[lang]
+        st.divider(); nav = st.radio("Navigation", [t["nav_sim"], t["nav_perf"], t["nav_admin"]])
         
         if nav == t["nav_admin"]:
             st.divider()
-            if not st.session_state.admin_logged_in:
-                p = st.text_input("🔑 Admin Access", type="password")
-                if p == ADMIN_PASS: st.session_state.admin_logged_in = True; st.success("Access Granted"); st.rerun()
+            if not st.session_state.admin:
+                if st.text_input("🔑 Password", type="password") == ADMIN_PASS:
+                    st.session_state.admin = True; st.success("Authorized"); st.rerun()
             else:
-                st.success("Yönetici Oturumu Aktif")
-                if st.button("Çıkış Yap"): st.session_state.admin_logged_in = False; st.rerun()
-                is_admin = True
+                if st.button("Logout"): st.session_state.admin = False; st.rerun()
+        
+        st.divider(); high_prec = st.checkbox("Monte Carlo (100k)", help="Use experimental simulation")
 
-        st.divider(); high_prec = st.checkbox("Monte Carlo (100k Sim)", help="Akademik hassasiyet için simülasyon sayısını artırır.")
-
-    st.title("QUANTUM FOOTBALL"); st.caption(f"v{MODEL_VERSION} | AI-Powered Predictive Analytics")
+    st.title("QUANTUM FOOTBALL"); st.caption(f"{MODEL_VERSION} | Neural-Statistical Hybrid Engine")
 
     if nav == t["nav_sim"]:
-        if not FOOTBALL_API_KEY: st.error("API Key Eksik"); st.stop()
+        if not FOOTBALL_API_KEY: st.error("System Halted: API Key Missing"); st.stop()
         dm = DataManager(FOOTBALL_API_KEY); eng = AnalyticsEngine(EloManager(db))
         c1, c2 = st.columns([1, 2])
         with c1: lk = st.selectbox("League", list(CONSTANTS["LEAGUES"].keys())); lc = CONSTANTS["LEAGUES"][lk]
@@ -388,29 +356,29 @@ def main():
         
         if fixtures:
             upc = [m for m in fixtures['matches'] if m['status'] in ['SCHEDULED','TIMED','IN_PLAY','PAUSED']]
-            if not upc: st.warning("Bu ligde yaklaşan maç bulunamadı.")
+            if not upc: st.warning("No upcoming matches found.")
             else:
                 matches_map = {f"{m['homeTeam']['name']} vs {m['awayTeam']['name']}": m for m in upc}
-                with c2: sel_m = st.selectbox("Match Selection", list(matches_map.keys())); m = matches_map[sel_m]
-                with st.expander("🛠️ Tactical Parameters"):
-                    ct1, ct2, ct3 = st.columns(3)
-                    th = ct1.selectbox("Home Tactics", list(CONSTANTS["TACTICS"].keys()))
-                    ta = ct2.selectbox("Away Tactics", list(CONSTANTS["TACTICS"].keys()))
-                    roster = ct3.selectbox("Roster Status", ["Full Squad", "Home Missing Key", "Away Missing Key"])
-                    roster_f = (0.85, 1.0) if roster == "Home Missing Key" else (1.0, 0.85) if roster == "Away Missing Key" else (1.0, 1.0)
+                with c2: sel_m = st.selectbox("Match", list(matches_map.keys())); m = matches_map[sel_m]
+                with st.expander("⚙️ Advanced Parameters"):
+                    c_1, c_2, c_3 = st.columns(3)
+                    th = c_1.selectbox("Home Tactic", list(CONSTANTS["TACTICS"].keys()))
+                    ta = c_2.selectbox("Away Tactic", list(CONSTANTS["TACTICS"].keys()))
+                    roster = c_3.selectbox("Availability", ["Full Squad", "Home Missing Key", "Away Missing Key"])
+                    rf = (0.85, 1.0) if roster == "Home Missing Key" else (1.0, 0.85) if roster == "Away Missing Key" else (1.0, 1.0)
 
                 if st.button(t["btn_sim"]):
                     h_id = m['homeTeam']['id']; a_id = m['awayTeam']['id']
-                    hs = team_stats.get(h_id, {'name': m['homeTeam']['name'], 'gf':1, 'ga':1, 'played':1}); as_ = team_stats.get(a_id, {'name': m['awayTeam']['name'], 'gf':1, 'ga':1, 'played':1})
+                    hs = team_stats.get(h_id, {'name': m['homeTeam']['name']}); as_ = team_stats.get(a_id, {'name': m['awayTeam']['name']})
                     hs['form_overall'] = dm.get_form(fixtures, h_id, 'ALL'); hs['form_home'] = dm.get_form(fixtures, h_id, 'HOME')
                     as_['form_overall'] = dm.get_form(fixtures, a_id, 'ALL'); as_['form_away'] = dm.get_form(fixtures, a_id, 'AWAY')
                     
-                    with st.spinner("Quantum Engine Processing..."):
+                    with st.spinner("Processing Quantum Models..."):
                         pars = {"t_h": CONSTANTS["TACTICS"][th], "t_a": CONSTANTS["TACTICS"][ta]}
-                        res = eng.run_simulation(hs, as_, lg_stats, pars, h_id, a_id, lc, roster_f, high_prec)
+                        res = eng.run_simulation(hs, as_, lg_stats, pars, h_id, a_id, lc, rf, high_prec)
                     
-                    dqi = 100 if hs.get('played',0) > 5 else 80
-                    conf = int(max(res['probs']['1'], res['probs']['X'], res['probs']['2']) * 0.95 * (dqi/100))
+                    dqi = 100 if hs.get('home_played',0) > 3 else 75
+                    conf = int(max(res['probs']['1'], res['probs']['X'], res['probs']['2']) * 0.9 * (dqi/100))
                     save_pred_db(m, [res['probs']['1'], res['probs']['X'], res['probs']['2']], pars, user, {'hn': hs['name'], 'an': as_['name'], 'hid': h_id, 'aid': a_id, 'lg': lc, 'conf': conf, 'dqi': dqi})
 
                     st.markdown(f"<div class='narrative-box'>{res['narrative']}</div>", unsafe_allow_html=True); st.write("")
@@ -419,54 +387,50 @@ def main():
                     c_d.markdown(f"<div class='highlight-box'><div class='metric-label'>DRAW</div><div class='big-metric'>%{res['probs']['X']:.1f}</div></div>", unsafe_allow_html=True)
                     c_a.markdown(f"<div class='highlight-box'><div class='metric-label'>{as_['name']}</div><div class='big-metric'>%{res['probs']['2']:.1f}</div></div>", unsafe_allow_html=True)
                     
-                    c_v1, c_v2 = st.columns([1,1])
-                    with c_v1: st.plotly_chart(create_radar(hs, as_, res['vectors']), use_container_width=True)
-                    with c_v2: 
-                        st.subheader("🎯 Expected Goals (xG)"); st.metric("Home", f"{res['xg'][0]:.2f}", f"CI: {int(res['ci'][0][0])}-{int(res['ci'][0][1])}"); st.metric("Away", f"{res['xg'][1]:.2f}", f"CI: {int(res['ci'][1][0])}-{int(res['ci'][1][1])}")
+                    v1, v2 = st.columns([1,1])
+                    with v1: st.plotly_chart(create_radar(hs, as_, res['vectors']), use_container_width=True)
+                    with v2: 
+                        st.subheader("🎯 Expected Goals (xG)"); st.metric("Home", f"{res['xg'][0]:.2f}", f"CI: {res['ci'][0]}"); st.metric("Away", f"{res['xg'][1]:.2f}", f"CI: {res['ci'][1]}")
                         st.plotly_chart(create_score_heatmap(res['matrix'], hs['name'], as_['name']), use_container_width=True)
-                    st.subheader(t["scenarios"]); st.table(pd.DataFrame({"Scenario": ["Over 2.5 Goals", "Both Teams to Score"], "Probability": [f"%{res['probs']['o25']:.1f}", f"%{res['probs']['btts']:.1f}"]}))
+                    st.subheader(t["scenarios"]); st.table(pd.DataFrame({"Scenario": ["Over 2.5", "BTTS (KG Var)"], "Probability": [f"%{res['probs']['o25']:.1f}", f"%{res['probs']['btts']:.1f}"]}))
 
     elif nav == t["nav_perf"]:
-        st.header("📈 Model Performance Audit")
+        st.header("📈 Validation Center")
         if db:
             docs = list(db.collection("predictions").where("validation_status", "==", "VALIDATED").limit(200).stream())
             if docs:
-                total = len(docs); correct = 0; brier_sum = 0; rps_sum = 0; cal_data = []
-                for d in docs:
-                    dd = d.to_dict(); pred = dd.get("predicted_outcome"); act = dd.get("actual_result")
-                    if pred == act: correct += 1
-                    brier_sum += dd.get("brier_score", 0); rps_sum += dd.get("rps_score", 0)
-                    cal_data.append({"prob": max(dd["home_prob"], dd["draw_prob"], dd["away_prob"]), "correct": 1 if pred == act else 0})
-                c1, c2, c3 = st.columns(3); c1.metric("Validated Matches", total); c2.metric("Accuracy", f"%{(correct/total)*100:.1f}"); c3.metric("RPS (Lower is Better)", f"{rps_sum/total:.4f}")
-                st.subheader("Calibration Curve"); df_cal = pd.DataFrame(cal_data); df_cal['bin'] = pd.cut(df_cal['prob'], bins=np.arange(0, 101, 10))
+                total = len(docs); correct = sum(1 for d in docs if d.to_dict().get("predicted_outcome") == d.to_dict().get("actual_result"))
+                rps = sum(d.to_dict().get("rps_score", 0) for d in docs) / total
+                c1, c2, c3 = st.columns(3); c1.metric("Samples", total); c2.metric("Accuracy", f"%{(correct/total)*100:.1f}"); c3.metric("RPS Score", f"{rps:.4f}")
+                
+                cal_data = [{"prob": max(d.to_dict()["home_prob"], d.to_dict()["draw_prob"], d.to_dict()["away_prob"]), "correct": 1 if d.to_dict()["predicted_outcome"] == d.to_dict()["actual_result"] else 0} for d in docs]
+                df_cal = pd.DataFrame(cal_data); df_cal['bin'] = pd.cut(df_cal['prob'], bins=np.arange(0, 101, 10))
                 cal_plot = df_cal.groupby('bin').agg({'correct': 'mean', 'prob': 'mean'}).reset_index()
-                st.plotly_chart(px.scatter(cal_plot, x='prob', y='correct', title="Reliability Diagram", labels={'prob': 'Confidence', 'correct': 'Accuracy'}).add_shape(type="line", x0=0, y0=0, x1=100, y1=1, line=dict(color="Red", dash="dash")), use_container_width=True)
-                st.dataframe(pd.DataFrame([{"Match": d.to_dict().get("match_name"), "Prediction": d.to_dict().get("predicted_outcome"), "Result": d.to_dict().get("actual_result")} for d in docs]))
-            else: st.info("No validated data available yet.")
+                st.plotly_chart(px.scatter(cal_plot, x='prob', y='correct', title="Confidence Reliability", labels={'prob':'Model Confidence', 'correct':'Real Accuracy'}).add_shape(type="line", x0=0,y0=0,x1=100,y1=1, line=dict(color="red", dash="dash")), use_container_width=True)
+                st.dataframe(pd.DataFrame([{"Match": d.to_dict().get("match_name"), "Pred": d.to_dict().get("predicted_outcome"), "Result": d.to_dict().get("actual_result")} for d in docs]))
+            else: st.info("No validated records yet.")
 
     elif nav == t["nav_admin"]:
-        if is_admin:
-            st.header("🛡️ Admin Core"); at1, at2, at3 = st.tabs(["Smart Sync", "Manual Entry", "System"])
+        if st.session_state.admin:
+            st.header("🛡️ System Core"); at1, at2, at3 = st.tabs(["Smart Sync", "Manual", "Tools"])
             with at1:
-                st.info("Algoritma: Veritabanındaki eksik maçları (None) bulur ve sadece ilgili ligleri, son 10 gün filtresiyle tarar.")
-                if st.button("🔄 EXECUTE SMART SYNC"):
-                    with st.spinner("Synchronizing with API..."):
+                st.info("Algoritma: Veritabanındaki eksik maçları (None) bulur ve sadece ilgili ligleri, son 14 gün filtresiyle tarar. Anti-Ban koruması aktif.")
+                if st.button("🔄 START AUTO-SYNC"):
+                    with st.spinner("Syncing..."):
                         c = auto_sync_results()
-                        if c > 0: st.success(f"{c} matches synchronized & validated!")
-                        else: st.warning("All records are up to date.")
+                        if c > 0: st.success(f"{c} matches synced.")
+                        else: st.warning("Up to date.")
             with at2:
                 if db:
                     pend = list(db.collection("predictions").where("actual_result", "==", None).limit(500).stream()); pend.sort(key=lambda x: x.to_dict().get('match_date', '0000'))
                     opts = {d.id: f"{d.to_dict().get('match_name')} ({str(d.to_dict().get('match_date'))[:10]})" for d in pend}
                     if opts:
                         with st.form("val"):
-                            sid = st.selectbox("Select Pending Match", list(opts.keys()), format_func=lambda x: opts[x])
-                            c1, c2 = st.columns(2); hg = c1.number_input("Home Goals", 0); ag = c2.number_input("Away Goals", 0); nt = st.text_area("Audit Notes")
-                            if st.form_submit_button("Commit Result"): update_result_db(sid, hg, ag, nt); st.success("Record Updated"); time.sleep(1); st.rerun()
+                            sid = st.selectbox("Select Match", list(opts.keys()), format_func=lambda x: opts[x])
+                            c1, c2 = st.columns(2); hg = c1.number_input("HG", 0); ag = c2.number_input("AG", 0); nt = st.text_area("Note")
+                            if st.form_submit_button("Save"): update_result_db(sid, hg, ag, nt); st.success("Saved"); time.sleep(1); st.rerun()
             with at3:
-                if st.button("🧹 Cache Temizle (Force Refresh)"):
-                    st.cache_data.clear()
-                    st.success("Sistem önbelleği temizlendi.")
+                if st.button("🧹 Flush Cache"): st.cache_data.clear(); st.success("Cache Cleared.")
         else: st.error("Access Denied.")
 
 if __name__ == "__main__":
