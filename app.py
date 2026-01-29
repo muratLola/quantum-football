@@ -691,26 +691,52 @@ def main():
             # 1. BATCH PROCESSING
             with adm_t1:
                 st.write(t["admin_batch_desc"])
+                
+                # Tarih Aralığı Seçimi (Geçmiş maçlar için)
+                lookback_days = st.slider("Geriye Dönük Tarama (Gün)", 0, 14, 3, help="Kaç gün önceki bitmiş maçları da sisteme ekleyelim?")
+                
                 if f:
                     if st.button(t["admin_batch_btn"]):
-                        target_matches = [m for m in f['matches'] if m['status'] in ['SCHEDULED', 'TIMED', 'IN_PLAY', 'PAUSED']]
-                        progress_bar = st.progress(0)
-                        count = 0
-                        for i, tm in enumerate(target_matches):
-                            try:
-                                h_id, a_id = tm['homeTeam']['id'], tm['awayTeam']['id']
-                                hs = dm.get_stats(s, f, h_id); as_ = dm.get_stats(s, f, a_id)
-                                pars = {"t_h": (1,1), "t_a": (1,1), "weather": 1.0, "hk": False, "ak": False, "hgk": False, "agk": False, "power_diff": 0}
-                                dqi = 100; 
-                                if hs['played'] < 5: dqi -= 20
-                                res = eng.run_ensemble_analysis(hs, as_, 2.8, pars, h_id, a_id, lc)
-                                conf = int(max(res['1x2']) * (dqi/100.0))
-                                meta = {"hn": hs['name'], "an": as_['name'], "hid": h_id, "aid": a_id, "lg": lc, "conf": conf, "dqi": dqi}
-                                save_pred_db(tm, res['1x2'], pars, "Auto-Batch", meta)
-                                count += 1
-                            except Exception as e: pass 
-                            progress_bar.progress((i + 1) / len(target_matches))
-                        st.success(t["admin_batch_success"].format(count))
+                        # Şimdiki zaman
+                        now = datetime.utcnow()
+                        cutoff_date = now - timedelta(days=lookback_days)
+                        
+                        target_matches = []
+                        for m in f['matches']:
+                            # Maç tarihi (String -> Datetime)
+                            m_date_str = m['utcDate']
+                            m_date = datetime.strptime(m_date_str, "%Y-%m-%dT%H:%M:%SZ")
+                            
+                            # 1. Gelecek ve Canlı maçları her türlü al
+                            if m['status'] in ['SCHEDULED', 'TIMED', 'IN_PLAY', 'PAUSED']:
+                                target_matches.append(m)
+                            
+                            # 2. Geçmiş maçları (Eğer tarih limitine uyuyorsa) al
+                            elif m['status'] == 'FINISHED' and m_date > cutoff_date:
+                                target_matches.append(m)
+
+                        if not target_matches:
+                            st.warning("Kriterlere uygun maç bulunamadı.")
+                        else:
+                            progress_bar = st.progress(0)
+                            count = 0
+                            for i, tm in enumerate(target_matches):
+                                try:
+                                    h_id, a_id = tm['homeTeam']['id'], tm['awayTeam']['id']
+                                    hs = dm.get_stats(s, f, h_id); as_ = dm.get_stats(s, f, a_id)
+                                    pars = {"t_h": (1,1), "t_a": (1,1), "weather": 1.0, "hk": False, "ak": False, "hgk": False, "agk": False, "power_diff": 0}
+                                    dqi = 100; 
+                                    if hs['played'] < 5: dqi -= 20
+                                    res = eng.run_ensemble_analysis(hs, as_, 2.8, pars, h_id, a_id, lc)
+                                    conf = int(max(res['1x2']) * (dqi/100.0))
+                                    meta = {"hn": hs['name'], "an": as_['name'], "hid": h_id, "aid": a_id, "lg": lc, "conf": conf, "dqi": dqi}
+                                    
+                                    save_pred_db(tm, res['1x2'], pars, "Auto-Batch", meta)
+                                    count += 1
+                                except Exception as e: pass 
+                                progress_bar.progress((i + 1) / len(target_matches))
+                            
+                            st.success(t["admin_batch_success"].format(count))
 
             # 2. SONUÇ DOĞRULAMA (PENDING)
             with adm_t2:
@@ -718,8 +744,8 @@ def main():
                     st.error("Veritabanı bağlantısı yok!")
                 else:
                     try:
-                        # Limit 500 ve Eski maçlar üstte
-                        pend_ref = db.collection("predictions").where("actual_result", "==", None).limit(500)
+                        # Limit 1000 ve Eski maçlar üstte
+                        pend_ref = db.collection("predictions").where("actual_result", "==", None).limit(1000)
                         pend = list(pend_ref.stream())
                         pend.sort(key=lambda x: x.to_dict().get('match_date', '0000'), reverse=False)
                         
