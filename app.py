@@ -15,7 +15,7 @@ from scipy.stats import poisson
 import functools
 
 # --- 0. SİSTEM VE KONFIGURASYON ---
-MODEL_VERSION = "v32.0-Phoenix"
+MODEL_VERSION = "v33.0-Resurrection"
 
 st.set_page_config(page_title="QUANTUM FOOTBALL", page_icon="⚽", layout="wide")
 np.random.seed(42)
@@ -118,20 +118,30 @@ class AnalyticsEngine:
         if total_xg < 2.8: return -0.12
         return -0.09
 
+    def _safe_strength(self, goals, played, league_avg):
+        # FIX: SIFIR ISTATISTIK HATASINI DUZELTEN FONKSIYON
+        # Eğer takımın verisi yoksa veya 0 ise, lig ortalamasını (1.0) baz al.
+        if played < 2 or league_avg == 0: return 1.0
+        val = (goals / played) / league_avg
+        return max(0.4, val) # En kötü takımın gücü bile 0.4'ün altına düşemez
+
     def run_simulation(self, h_stats, a_stats, lg_stats, params, h_id, a_id, league_code, roster_factor, high_precision=False):
         l_prof = LEAGUE_PROFILES.get(league_code, LEAGUE_PROFILES["DEFAULT"])
         
-        # 1. TEMEL DEĞİŞKENLER (Safe Assign)
+        # 1. HÜCUM/SAVUNMA GÜCÜ (Anti-Zero Logic)
         h_played = max(1, h_stats.get('home_played', h_stats.get('played', 1)/2))
         a_played = max(1, a_stats.get('away_played', a_stats.get('played', 1)/2))
         
-        # Grafik ve Hesaplama Değişkenleri (has, hdw vb.)
-        has = h_stats.get('home_gf', 0) / h_played / lg_stats.get('home_avg_goals', 1.5)
-        hdw = h_stats.get('home_ga', 0) / h_played / lg_stats.get('away_avg_goals', 1.2)
-        aas = a_stats.get('away_gf', 0) / a_played / lg_stats.get('away_avg_goals', 1.2)
-        adw = a_stats.get('away_ga', 0) / a_played / lg_stats.get('home_avg_goals', 1.5)
+        lg_h_avg = lg_stats.get('home_avg_goals', 1.5)
+        lg_a_avg = lg_stats.get('away_avg_goals', 1.2)
+
+        # FIX: has, hdw, aas, adw hesaplarken _safe_strength kullanıyoruz
+        has = self._safe_strength(h_stats.get('home_gf', 0), h_played, lg_h_avg)
+        hdw = self._safe_strength(h_stats.get('home_ga', 0), h_played, lg_a_avg)
+        aas = self._safe_strength(a_stats.get('away_gf', 0), a_played, lg_a_avg)
+        adw = self._safe_strength(a_stats.get('away_ga', 0), a_played, lg_h_avg)
         
-        # 2. EWMA FORM
+        # 2. FORM
         h_form = (h_stats.get('form_home', 1.0)*0.65 + h_stats.get('form_overall', 1.0)*0.35)
         a_form = (a_stats.get('form_away', 1.0)*0.65 + a_stats.get('form_overall', 1.0)*0.35)
         form_diff = (h_form - a_form) * 0.22 
@@ -144,9 +154,13 @@ class AnalyticsEngine:
         elo_mult = 1 + (elo_prob_h - 0.5) * 0.5
 
         # 4. xG HESAPLAMA
-        xg_h = has * adw * lg_stats.get('home_avg_goals', 1.5) * l_prof["pace"] * roster_factor[0] * elo_mult * (1+form_diff) * params['t_h'][0] * params['t_a'][1] * l_prof["ha"]
-        xg_a = aas * hdw * lg_stats.get('away_avg_goals', 1.2) * l_prof["pace"] * roster_factor[1] * (2-elo_mult) * (1-form_diff) * params['t_a'][0] * params['t_h'][1]
+        xg_h = has * adw * lg_h_avg * l_prof["pace"] * roster_factor[0] * elo_mult * (1+form_diff) * params['t_h'][0] * params['t_a'][1] * l_prof["ha"]
+        xg_a = aas * hdw * lg_a_avg * l_prof["pace"] * roster_factor[1] * (2-elo_mult) * (1-form_diff) * params['t_a'][0] * params['t_h'][1]
         
+        # xG Güvenlik (Asla 0 olmasın)
+        xg_h = max(0.1, xg_h)
+        xg_a = max(0.1, xg_a)
+
         limit = 10; h_probs = poisson.pmf(np.arange(limit), xg_h); a_probs = poisson.pmf(np.arange(limit), xg_a)
         matrix = np.outer(h_probs, a_probs)
         
@@ -253,14 +267,12 @@ def auto_sync_results():
     
     if not pending: st.info("Veritabanında eksik maç yok."); return 0
     
-    # FIX: Tarih kısıtlamasını kaldır (Tüm sezonu tara)
     leagues = set([d.to_dict().get("league") for d in pending])
-    st.info(f"{len(pending)} eksik tahmin bulundu. Tüm sezon taranıyor...")
+    st.info(f"{len(pending)} açık tahmin bulundu. Tüm sezon taranıyor...")
     
     for code in leagues:
         try:
             time.sleep(6) # Anti-Ban
-            # dateFrom olmadan, tüm bitmiş maçları çek
             url = f"{CONSTANTS['API_URL']}/competitions/{code}/matches?status=FINISHED"
             r = requests.get(url, headers=headers).json()
             if 'matches' not in r: continue
@@ -271,7 +283,7 @@ def auto_sync_results():
                 if d.get("league") == code and mid in fin:
                     m = fin[mid]; hg=m['score']['fullTime']['home']; ag=m['score']['fullTime']['away']
                     if hg is not None:
-                        update_result_db(mid, hg, ag, "AutoSync v32")
+                        update_result_db(mid, hg, ag, "AutoSync v33")
                         count += 1
                         st.markdown(f"<div class='success-log'>✅ {d['match_name']}: {hg}-{ag}</div>", unsafe_allow_html=True)
         except Exception as e: st.markdown(f"<div class='error-log'>⚠️ Sync Error ({code}): {e}</div>", unsafe_allow_html=True)
@@ -297,7 +309,6 @@ def create_score_heatmap(matrix, h_name, a_name):
 
 def create_radar(hs, as_, vectors):
     cats = ['Attack', 'Defense', 'Momentum (Form)', 'Elo Rating']
-    # Vectors: (has, hdw, aas, adw)
     h_v = [min(100, vectors[0]*50), min(100, (2-vectors[1])*50), hs.get('form_home', 1)*80, 85]
     a_v = [min(100, vectors[2]*50), min(100, (2-vectors[3])*50), as_.get('form_away', 1)*80, 80]
     fig = go.Figure()
@@ -308,7 +319,6 @@ def create_radar(hs, as_, vectors):
 
 # --- 5. MAIN ---
 def main():
-    # --- FIX: User Tanımlaması (Eksik Olan Satır) ---
     q = st.query_params
     user = q.get("user_email", "Guest")
     
@@ -362,7 +372,6 @@ def main():
                     
                     dqi = 100 if hs.get('home_played',0) > 3 else 75
                     conf = int(max(res['probs']['1'], res['probs']['X'], res['probs']['2']) * 0.9 * (dqi/100))
-                    # FIX: USER değişkeni artık tanımlı
                     save_pred_db(m, [res['probs']['1'], res['probs']['X'], res['probs']['2']], pars, user, {'hn': hs['name'], 'an': as_['name'], 'hid': h_id, 'aid': a_id, 'lg': lc, 'conf': conf, 'dqi': dqi})
 
                     st.markdown(f"<div class='narrative-box'>{res['narrative']}</div>", unsafe_allow_html=True); st.write("")
@@ -382,7 +391,6 @@ def main():
         st.header("📈 Validation Center")
         if db:
             docs = list(db.collection("predictions").where("validation_status", "==", "VALIDATED").limit(200).stream())
-            # FIX: KeyError'u önleyen güvenli filtreleme (predicted_outcome'u olmayanları atla)
             valid_docs = [d for d in docs if d.to_dict().get("predicted_outcome") and d.to_dict().get("actual_result")]
             
             if valid_docs:
