@@ -12,10 +12,9 @@ import hashlib
 import firebase_admin
 from firebase_admin import credentials, firestore
 from scipy.stats import poisson
-import google.generativeai as genai
 
 # --- 0. SİSTEM VE KONFIGURASYON ---
-MODEL_VERSION = "v24.0-PureScience"
+MODEL_VERSION = "v24.0-PureScience-Lite"
 
 st.set_page_config(page_title="QUANTUM FOOTBALL", page_icon="⚽", layout="wide")
 np.random.seed(42)
@@ -44,8 +43,9 @@ TRANS = {
 AUTH_SALT = st.secrets.get("auth_salt", "quantum_research_key_2026")
 ADMIN_EMAILS = ["muratlola@gmail.com", "firat3306ogur@gmail.com"]
 logging.basicConfig(level=logging.INFO); logger = logging.getLogger(__name__)
+
+# GEMINI API KEY (Secrets'tan çekiliyor)
 GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", None)
-if GEMINI_API_KEY: genai.configure(api_key=GEMINI_API_KEY)
 
 # Firebase Init
 if not firebase_admin._apps:
@@ -75,10 +75,14 @@ class AnalyticsEngine:
 
     def get_ai_narrative(self, h_name, a_name, probs, entropy, xg_h, xg_a, form_h, form_a):
         static = f"⚠️ **Yüksek Varyans:** {h_name} vs {a_name} maçında belirsizlik yüksek." if entropy > 1.55 else f"✅ **İstatistiksel Avantaj:** {h_name if xg_h > xg_a else a_name}."
+        
+        # REST API ile Gemini Bağlantısı (Kütüphanesiz - Hızlı Yükleme)
         if GEMINI_API_KEY:
             try:
-                model = genai.GenerativeModel('gemini-pro')
-                prompt = f"""
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+                headers = {'Content-Type': 'application/json'}
+                
+                prompt_text = f"""
                 Sen bir Veri Bilimcisi ve Spor Analistisin. Asla bahis terimleri kullanma.
                 Maç: {h_name} (Form Endeksi: {form_h:.2f}) vs {a_name} (Form Endeksi: {form_a:.2f}).
                 Modelin xG Tahmini: {xg_h:.2f} - {xg_a:.2f}.
@@ -86,9 +90,23 @@ class AnalyticsEngine:
                 Entropi (Kaos/Belirsizlik): {entropy:.2f}.
                 Bu veriler ışığında, takımların performans beklentilerini teknik bir dille 2 cümleyle özetle.
                 """
-                response = model.generate_content(prompt)
-                return f"🤖 **Gemini AI Analizi:** {response.text}"
-            except: return static
+                
+                payload = {
+                    "contents": [{
+                        "parts": [{"text": prompt_text}]
+                    }]
+                }
+                
+                response = requests.post(url, headers=headers, json=payload, timeout=6)
+                
+                if response.status_code == 200:
+                    ai_text = response.json()['candidates'][0]['content']['parts'][0]['text']
+                    return f"🤖 **Gemini AI Analizi:** {ai_text}"
+                else:
+                    return static
+            except Exception as e:
+                logger.error(f"AI Error: {e}")
+                return static
         return static
 
     def calculate_match_specific_rho(self, projected_total_xg):
